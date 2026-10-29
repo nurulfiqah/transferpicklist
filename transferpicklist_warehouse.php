@@ -90,27 +90,6 @@ function summarizeCodes($codesCsv, $limit = 3000) {
     return implode(', ', array_slice($codes, 0, $limit)) . ' +' . ($count - $limit) . ' more';
 }
 
-// AJAX: toggle item confirmed/pending
-if (isset($_POST['ajax']) && $_POST['ajax'] === 'toggle_status') {
-    ob_clean();
-    header('Content-Type: application/json');
-    $itemId = isset($_POST['id']) ? (int)$_POST['id'] : 0;
-    if ($itemId > 0) {
-        $curRes = $conn->query("SELECT status, picklist_id, item_code FROM transferpicklist_item WHERE id = $itemId AND recycle = 0");
-        if ($curRes && $curRow = $curRes->fetch_assoc()) {
-            $newStatus = $curRow['status'] === 'transferred' ? 'pending' : 'transferred';
-            $conn->query("UPDATE transferpicklist_item SET status = '" . $conn->real_escape_string($newStatus) . "' WHERE id = $itemId");
-            logWhAction($conn, (int)$curRow['picklist_id'], "Toggled item {$curRow['item_code']} (#$itemId) status: {$curRow['status']} -> $newStatus");
-            echo json_encode(array('ok' => true, 'status' => $newStatus));
-        } else {
-            echo json_encode(array('ok' => false));
-        }
-    } else {
-        echo json_encode(array('ok' => false));
-    }
-    exit;
-}
-
 // AJAX: toggle "agree to return to warehouse" lock for one item_code's row group.
 // Only return_confirmed=1 rows are shown to the outlet once the picklist is published —
 // see the (i.priority_type != 'warehouse' OR i.return_confirmed = 1) guard in
@@ -164,6 +143,16 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'delete_items') {
     }
     if (!empty($ids)) {
         $idList = implode(',', $ids);
+        // Same read-only rule as every other write here: never change a published picklist
+        $pubRes = $conn->query("
+            SELECT COUNT(*) AS c FROM transferpicklist_item i
+            JOIN transferpicklist_picklist p ON p.id = i.picklist_id
+            WHERE i.id IN ($idList) AND p.status = 'published'
+        ");
+        if ($pubRes && (int)$pubRes->fetch_assoc()['c'] > 0) {
+            echo json_encode(array('ok' => false, 'msg' => 'Picklist is published. Read-only.'));
+            exit;
+        }
         $conn->query("
             UPDATE transferpicklist_itemgrade ig
             JOIN transferpicklist_item i ON i.from_outlet_id = ig.outlet_id AND i.item_code = ig.item_code
@@ -444,58 +433,6 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'delete_region_all') {
         ");
         $affected = $conn->affected_rows;
         logWhAction($conn, getPicklistIdByNo($conn, $picklistNo), "Deleted ALL items in $region ($affected row(s)) — items: " . summarizeCodes($affectedCodes));
-        echo json_encode(array('ok' => true, 'affected' => $affected));
-    } else {
-        echo json_encode(array('ok' => false, 'msg' => 'Invalid params'));
-    }
-    exit;
-}
-
-// AJAX: restore ALL recycled items for an entire region
-if (isset($_POST['ajax']) && $_POST['ajax'] === 'restore_region_all') {
-    ob_clean();
-    header('Content-Type: application/json');
-    $picklistNo = isset($_POST['picklist_no']) ? trim($_POST['picklist_no']) : '';
-    $region     = isset($_POST['region'])      ? trim($_POST['region'])      : '';
-    $regionAcmm = array(
-        'peninsular' => array(1001, 1004),
-        'sabah'      => array(1016, 1013),
-        'sarawak'    => array(1005, 1002),
-    );
-    if ($picklistNo !== '' && isset($regionAcmm[$region])) {
-        $acmmList = implode(',', $regionAcmm[$region]);
-        $whRes = $conn->query("SELECT id FROM outlet WHERE acmm_id IN ($acmmList) AND recycle = 0");
-        $whIds = array(0);
-        if ($whRes) { while ($r = $whRes->fetch_assoc()) { $whIds[] = (int)$r['id']; } }
-        $whList = implode(',', $whIds);
-        $escPl  = $conn->real_escape_string($picklistNo);
-        // Capture which item codes will be restored before recycle=0 changes the lookup
-        $codesRes = $conn->query("
-            SELECT GROUP_CONCAT(DISTINCT i.item_code ORDER BY i.item_code) codes
-            FROM transferpicklist_item i
-            JOIN transferpicklist_picklist p ON p.id = i.picklist_id
-            WHERE p.picklist_no = '$escPl' AND i.to_outlet_id IN ($whList) AND i.recycle = 1
-        ");
-        $restoredCodes = $codesRes ? $codesRes->fetch_assoc()['codes'] : '';
-        // restore items
-        $conn->query("
-            UPDATE transferpicklist_item i
-            JOIN transferpicklist_picklist p ON p.id = i.picklist_id
-            SET i.recycle = 0
-            WHERE p.picklist_no = '$escPl'
-              AND i.to_outlet_id IN ($whList)
-              AND i.recycle = 1
-        ");
-        $affected = $conn->affected_rows;
-        // re-activate itemgrade
-        $conn->query("
-            UPDATE transferpicklist_itemgrade ig
-            JOIN transferpicklist_item i ON i.from_outlet_id = ig.outlet_id AND i.item_code = ig.item_code
-            JOIN transferpicklist_picklist p ON p.id = i.picklist_id
-            SET ig.is_active = 1
-            WHERE p.picklist_no = '$escPl' AND i.to_outlet_id IN ($whList) AND i.recycle = 0
-        ");
-        logWhAction($conn, getPicklistIdByNo($conn, $picklistNo), "Restored ALL deleted items in $region ($affected row(s)) — items: " . summarizeCodes($restoredCodes));
         echo json_encode(array('ok' => true, 'affected' => $affected));
     } else {
         echo json_encode(array('ok' => false, 'msg' => 'Invalid params'));
@@ -1235,8 +1172,9 @@ document.querySelectorAll('.rgn-del-all-btn').forEach(function(btn) {
             .then(function(data) {
                 btn.disabled = false;
                 if (data.ok) {
-                    location.reload();
+                    // Show the message first — reloading first could cancel it
                     alert(data.affected + ' items removed from ' + label);
+                    location.reload();
                 } else { alert(data.msg || 'Error'); }
             })
             .catch(function() { btn.disabled = false; alert('Network error'); });
@@ -1338,11 +1276,19 @@ function closeDelModal() {
 }
 
 
-document.getElementById('bulk-delete-btn').addEventListener('click', function() {
+// Bulk bar (and its Delete button) only exists when the picklist is editable —
+// on a published picklist it isn't rendered, so don't attach to it.
+var bulkDeleteBtn = document.getElementById('bulk-delete-btn');
+function whEsc(s) { var d = document.createElement('div'); d.appendChild(document.createTextNode(s)); return d.innerHTML; }
+// Region cell holds the qty link plus a bin button and warehouse badges — read the qty only
+function whRegionQty(cell) { var a = cell ? cell.querySelector('a') : null; return a ? a.textContent.trim() : '—'; }
+if (bulkDeleteBtn) bulkDeleteBtn.addEventListener('click', function() {
     var checked = getChecked();
     if (!checked.length) { alert('Please select at least one item.'); return; }
 
-    // Build item list from DOM — cells: 0=#, 1=ItemCode, 2=Desc, 3=Model, 4=HQReturn, 5=ProdOwn, 6=Officer, 7=TotalQty
+    // Build item list from DOM — cells (editable view): 0=#, 1=checkbox, 2=Item Code, 3=Description,
+    // 4=Model, 5=Return, 6=Product Ownership, 7=P.Officer, 8=Reorder Point, 9=Confirm Return,
+    // 10=Semenanjung, 11=Sabah, 12=Sarawak
     var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
     html += '<thead><tr>';
     html += '<th style="background:#455a64;color:#fff;padding:6px 10px;text-align:left;">Item Code</th>';
@@ -1358,11 +1304,11 @@ document.getElementById('bulk-delete-btn').addEventListener('click', function() 
         ids.forEach(function(id) { if (id) { allIds.push(id); } });
         var row = c.closest('tr');
         var cells = row ? row.querySelectorAll('td') : [];
-        var ic   = cells[2] ? cells[2].textContent.trim() : '—';
-        var desc = cells[3] ? cells[3].textContent.trim() : '—';
-        var pen  = cells[8] ? cells[8].textContent.trim() : '—';
-        var sab  = cells[9] ? cells[9].textContent.trim() : '—';
-        var sar  = cells[10] ? cells[10].textContent.trim() : '—';
+        var ic   = whEsc(cells[2] ? cells[2].textContent.trim() : '—');
+        var desc = whEsc(cells[3] ? cells[3].textContent.trim() : '—');
+        var pen  = whEsc(whRegionQty(cells[10]));
+        var sab  = whEsc(whRegionQty(cells[11]));
+        var sar  = whEsc(whRegionQty(cells[12]));
         rowKeys.push(ic);
         html += '<tr style="' + (idx % 2 === 1 ? 'background:#fafafa;' : '') + '">';
         html += '<td style="padding:5px 10px;font-family:monospace;">' + ic   + '</td>';
@@ -1465,36 +1411,6 @@ if (bulkChangeWhBtn) {
             .catch(function() { bulkChangeWhBtn.disabled = false; alert('Network error.'); });
     });
 }
-
-
-document.querySelectorAll('.bin-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-        var id = this.getAttribute('data-id');
-        if (!confirm('Move this item to rubbish?')) { return; }
-        var self = this;
-        self.disabled = true;
-
-        var fd = new FormData();
-        fd.append('ajax', 'delete_items');
-        fd.append('ids', id);
-
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', 'transferpicklist_warehouse.php', true);
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState !== 4) { return; }
-            self.disabled = false;
-            var res;
-            try { res = JSON.parse(xhr.responseText); } catch(e) { return; }
-            if (res && res.ok) {
-                var row = document.getElementById('row-' + id);
-                if (row) { row.parentNode.removeChild(row); }
-            } else {
-                alert('Delete failed. Please try again.');
-            }
-        };
-        xhr.send(fd);
-    });
-});
 </script>
 
 <?php
