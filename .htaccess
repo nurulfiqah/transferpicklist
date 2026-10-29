@@ -1,0 +1,5 @@
+# Block browser access to secret / config files in this module.
+# (.env holds the Tableau, database and sync-secret passwords.)
+<FilesMatch "^\.env">
+    Require all denied
+</FilesMatch>

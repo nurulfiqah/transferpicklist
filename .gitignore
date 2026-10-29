@@ -1,0 +1,19 @@
+# Secrets — never push (template with the keys: .env.example)
+.env
+
+# Tableau CSV evidence archive (business data, large)
+hyper/csv_archive/
+
+# Sync logs and lock files
+logs/
+*.lock
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Internal documentation (kept local, not pushed)
+documentation/
+
+# CA certificate bundle (kept per server; code falls back to php.ini curl.cainfo if missing)
+cacert.pem
