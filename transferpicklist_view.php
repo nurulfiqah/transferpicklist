@@ -4,12 +4,13 @@ $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 ini_set('memory_limit', '512M');
 include('../common/index_adv.php');
+require_once(__DIR__ . '/transferpicklist_pager.php');
 require_once(__DIR__ . '/transferpicklist_route_filter.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
-$_tpl_is_super_admin = (int)$transferpicklist_autho >= 3;
-$_tpl_is_admin = (int)$transferpicklist_autho >= 1;
+$_tpl_is_super_admin = (int)$transferpicklist_autho === 1;
+$_tpl_is_admin = (int)$transferpicklist_autho === 1;
 $_tpl_is_proc  = $_tpl_is_admin || ((int)$department === 18);
 if (!$_tpl_is_proc) { redirect('/odb/permission.php'); }
 
@@ -25,6 +26,8 @@ $stmt = $conn->prepare("SELECT * FROM transferpicklist_picklist WHERE id = ?");
 $stmt->bind_param('i', $id);
 $stmt->execute();
 $pl = $stmt->get_result()->fetch_assoc();
+// Confirm Return only applies to warehouse returns — hidden on -outlet pick lists
+$_tplShowReturn = !($pl && tplPicklistKind($pl['picklist_no']) === 'outlet');
 $stmt->close();
 
 if (!$pl) { header('Location: index.php'); die; }
@@ -250,7 +253,12 @@ $stmt->close();
 <?php endif; ?>
 
 <div class="alpro-box">
-    <div class="alpro-grid">
+    <!-- Pick list details + counts in ONE row (wraps on narrow screens) -->
+    <style>
+    .pl-summary-row { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:flex-start; }
+    .pl-summary-row > .alpro-field { flex:1 1 0; min-width:120px; text-align:center; margin:0; }
+    </style>
+    <div class="pl-summary-row">
         <div class="alpro-field">
             <label class="alpro-muted">Pick List No</label>
             <div class="alpro-mono"><?php echo htmlspecialchars($pl['picklist_no']); ?></div>
@@ -275,9 +283,6 @@ $stmt->close();
             <label class="alpro-muted">Date</label>
             <div><?php echo htmlspecialchars($pl['timestamp']); ?></div>
         </div>
-    </div>
-
-    <div class="alpro-grid alpro-mt-10">
         <div class="alpro-field">
             <label class="alpro-muted">Total Items</label>
             <div style="font-size:20px;font-weight:bold;"><?php echo (int)$stats['total']; ?></div>
@@ -302,7 +307,7 @@ $stmt->close();
 
     <?php if ($_tpl_is_super_admin): ?>
     <form method="post">
-        <div class="alpro-actions alpro-mt-10">
+        <div class="alpro-actions alpro-mt-10" style="display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
             <?php if ($pl['status'] === 'draft'): ?>
                 <input class="alpro-btn alpro-btn-blue" type="submit" name="publish" value="Publish to Outlets">
             <?php elseif ($pl['status'] === 'published'): ?>
@@ -329,14 +334,14 @@ $filterSumPri      = isset($_GET['search_priority'])  ? trim($_GET['search_prior
 $filterSumStat     = isset($_GET['search_status'])    ? trim($_GET['search_status'])    : '';
 $filterSumType     = isset($_GET['search_type'])      ? trim($_GET['search_type'])      : '';
 $filterOutletCode  = isset($_GET['search_outlet'])    ? trim($_GET['search_outlet'])    : '';
-$filterSumConfirm  = isset($_GET['search_confirm'])   ? trim($_GET['search_confirm'])   : '';
+$filterSumConfirm  = ($_tplShowReturn && isset($_GET['search_confirm'])) ? trim($_GET['search_confirm']) : '';
 
 // Load outlet list for this picklist (for dropdown)
 $_outletListRes = $conn->query("SELECT DISTINCT fo.code FROM transferpicklist_item i JOIN outlet fo ON fo.id = i.from_outlet_id WHERE i.picklist_id = $id AND i.recycle = 0 ORDER BY fo.code");
 $_outletListArr = array();
 while ($_ol = $_outletListRes->fetch_assoc()) { $_outletListArr[] = $_ol['code']; }
 
-$perPage = 50;
+$perPage = tplPerPage(50);
 $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset  = ($page - 1) * $perPage;
 
@@ -451,6 +456,7 @@ if (!empty($_codes)) {
                         <option value="transferred" <?php echo $filterSumStat === 'transferred' ? 'selected' : ''; ?>>Confirmed</option>
                     </select>
                 </td>
+                <?php if ($_tplShowReturn): ?>
                 <td style="width:16%;">
                     <span class="tpl-filter-label">Confirm Return (Warehouse)</span>
                     <select name="search_confirm">
@@ -459,6 +465,7 @@ if (!empty($_codes)) {
                         <option value="0" <?php echo $filterSumConfirm === '0' ? 'selected' : ''; ?>>Not Confirmed</option>
                     </select>
                 </td>
+                <?php endif; ?>
                 <td style="width:1%;white-space:nowrap;">
                     <span class="tpl-filter-label">&nbsp;</span>
                     <input type="submit" value="Search" class="alpro-btn alpro-btn-blue" style="height:32px;padding:0 18px;">
@@ -488,10 +495,10 @@ if (!empty($_codes)) {
         <th width="60">Qty</th>
         <th width="90">Priority</th>
         <th width="80">Status</th>
-        <th width="100">Confirm Return</th>
+        <?php if ($_tplShowReturn): ?><th width="100">Confirm Return</th><?php endif; ?>
     </tr>
     <?php if (empty($pageRows)): ?>
-    <tr><td colspan="9" class="alpro-center alpro-muted">No items found.</td></tr>
+    <tr><td colspan="<?php echo $_tplShowReturn ? 9 : 8; ?>" class="alpro-center alpro-muted">No items found.</td></tr>
     <?php endif; ?>
     <?php
     $currentOutlet = null;
@@ -503,7 +510,7 @@ if (!empty($_codes)) {
             $acmmLabel = !empty($row['from_acmm']) ? ' (' . str_pad((int)$row['from_acmm'], 4, '0', STR_PAD_LEFT) . ')' : '';
     ?>
     <tr class="outlet-group-header">
-        <td colspan="9">
+        <td colspan="<?php echo $_tplShowReturn ? 9 : 8; ?>">
             <?php echo htmlspecialchars($row['from_code'] . $acmmLabel); ?>
             &nbsp;&mdash;&nbsp;
             <span style="font-weight:normal;"><?php echo htmlspecialchars($row['from_name']); ?></span>
@@ -552,6 +559,7 @@ if (!empty($_codes)) {
                 <span style="color:#c62828;">Cancelled</span>
             <?php endif; ?>
         </td>
+        <?php if ($_tplShowReturn): ?>
         <td class="alpro-center">
             <?php if ($row['priority_type'] === 'warehouse'): ?>
                 <?php if ((int)$row['return_confirmed'] === 1): ?>
@@ -563,6 +571,7 @@ if (!empty($_codes)) {
                 <span class="alpro-muted">—</span>
             <?php endif; ?>
         </td>
+        <?php endif; ?>
     </tr>
     <?php endforeach; ?>
 </table>
@@ -578,25 +587,7 @@ $pgBaseS = 'transferpicklist_view.php?id=' . $id
     . ($filterSumType    !== '' ? '&search_type='      . urlencode($filterSumType)    : '')
     . ($filterSumConfirm !== '' ? '&search_confirm='   . urlencode($filterSumConfirm) : '');
 ?>
-<?php if ($totalPages > 1): ?>
-<div style="margin:10px 0; text-align:center;">
-    <?php if ($page > 1): ?>
-        <a href="<?php echo $pgBaseS; ?>&page=1" class="alpro-btn alpro-btn-grey">&laquo;&laquo; First</a>
-        <a href="<?php echo $pgBaseS; ?>&page=<?php echo $page-1; ?>" class="alpro-btn alpro-btn-grey">&laquo; Prev</a>
-    <?php endif; ?>
-    <?php for ($p = max(1, $page-3); $p <= min($totalPages, $page+3); $p++): ?>
-        <a href="<?php echo $pgBaseS; ?>&page=<?php echo $p; ?>"
-           class="alpro-btn <?php echo $p === $page ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>">
-            <?php echo $p; ?>
-        </a>
-    <?php endfor; ?>
-    <?php if ($page < $totalPages): ?>
-        <a href="<?php echo $pgBaseS; ?>&page=<?php echo $page+1; ?>" class="alpro-btn alpro-btn-grey">Next &raquo;</a>
-        <a href="<?php echo $pgBaseS; ?>&page=<?php echo $totalPages; ?>" class="alpro-btn alpro-btn-grey">Last &raquo;&raquo;</a>
-    <?php endif; ?>
-    <span class="alpro-muted" style="margin-left:10px;">Page <?php echo $page; ?> of <?php echo $totalPages; ?> (<?php echo number_format($totalItems); ?> items)</span>
-</div>
-<?php endif; ?>
+<?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
 
 <?php else: ?>
 <!-- OUTLET DETAIL VIEW -->
@@ -605,9 +596,9 @@ $filterItemCode  = isset($_GET['item_code']) ? trim($_GET['item_code']) : '';
 $filterPriority  = isset($_GET['priority'])  ? trim($_GET['priority'])  : '';
 $filterStatus    = isset($_GET['status'])    ? trim($_GET['status'])    : '';
 $filterType      = isset($_GET['type'])      ? trim($_GET['type'])      : '';
-$filterConfirm   = isset($_GET['confirm'])   ? trim($_GET['confirm'])   : '';
+$filterConfirm   = ($_tplShowReturn && isset($_GET['confirm'])) ? trim($_GET['confirm']) : '';
 
-$itemPerPage  = 50;
+$itemPerPage  = tplPerPage(50);
 $itemPage     = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $itemOffset   = ($itemPage - 1) * $itemPerPage;
 
@@ -765,6 +756,7 @@ $maintainItems = $conn->query("
                         <?php /* <option value="cancelled" <?php echo $filterStatus === 'cancelled' ? 'selected' : ''; ?>>Cancelled</option> */ ?>
                     </select>
                 </td>
+                <?php if ($_tplShowReturn): ?>
                 <td style="width:18%;">
                     <span class="detail-filter-label">Confirm Return (Warehouse)</span>
                     <select name="confirm">
@@ -773,6 +765,7 @@ $maintainItems = $conn->query("
                         <option value="0" <?php echo $filterConfirm === '0' ? 'selected' : ''; ?>>Not Confirmed</option>
                     </select>
                 </td>
+                <?php endif; ?>
                 <td style="width:1%;white-space:nowrap;">
                     <input type="submit" value="Search" class="alpro-btn alpro-btn-blue" style="height:32px;padding:0 18px;">
                     <a href="transferpicklist_view.php?id=<?php echo $id; ?>&outlet=<?php echo urlencode($outletCode); ?>" class="alpro-btn alpro-btn-grey" style="height:32px;padding:0 14px;line-height:32px;display:inline-block;">Reset</a>
@@ -793,10 +786,10 @@ $maintainItems = $conn->query("
             <th>Transfer To</th>
             <th>Priority</th>
             <th>Status</th>
-            <th>Confirm Return</th>
+            <?php if ($_tplShowReturn): ?><th>Confirm Return</th><?php endif; ?>
         </tr>
         <?php if ($items->num_rows === 0): ?>
-        <tr><td colspan="8" class="alpro-center alpro-muted">No items.</td></tr>
+        <tr><td colspan="<?php echo $_tplShowReturn ? 8 : 7; ?>" class="alpro-center alpro-muted">No items.</td></tr>
         <?php endif; ?>
         <?php $rn = $itemOffset; while ($item = $items->fetch_assoc()): $rn++; ?>
         <tr>
@@ -840,6 +833,7 @@ $maintainItems = $conn->query("
                     <span style="color:#c62828;">Cancelled</span>
                 <?php endif; ?>
             </td>
+            <?php if ($_tplShowReturn): ?>
             <td class="alpro-center">
                 <?php if ($item['priority_type'] === 'warehouse'): ?>
                     <?php if ((int)$item['return_confirmed'] === 1): ?>
@@ -851,6 +845,7 @@ $maintainItems = $conn->query("
                     <span class="alpro-muted">—</span>
                 <?php endif; ?>
             </td>
+            <?php endif; ?>
         </tr>
         <?php endwhile; ?>
     </table>
@@ -864,23 +859,7 @@ $pgBaseD = 'transferpicklist_view.php?id=' . $id . '&outlet=' . urlencode($outle
     . ($filterStatus    !== '' ? '&status='    . urlencode($filterStatus)    : '')
     . ($filterConfirm   !== '' ? '&confirm='   . urlencode($filterConfirm)   : '');
 ?>
-<?php if ($itemTotalPages > 1): ?>
-<div style="margin:10px 0; text-align:center;">
-    <?php if ($itemPage > 1): ?>
-        <a href="<?php echo $pgBaseD; ?>&page=<?php echo $itemPage-1; ?>" class="alpro-btn alpro-btn-grey">&laquo; Prev</a>
-    <?php endif; ?>
-    <?php for ($p = max(1, $itemPage-3); $p <= min($itemTotalPages, $itemPage+3); $p++): ?>
-        <a href="<?php echo $pgBaseD; ?>&page=<?php echo $p; ?>"
-           class="alpro-btn <?php echo $p === $itemPage ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>">
-            <?php echo $p; ?>
-        </a>
-    <?php endfor; ?>
-    <?php if ($itemPage < $itemTotalPages): ?>
-        <a href="<?php echo $pgBaseD; ?>&page=<?php echo $itemPage+1; ?>" class="alpro-btn alpro-btn-grey">Next &raquo;</a>
-    <?php endif; ?>
-    <span class="alpro-muted" style="margin-left:10px;">Page <?php echo $itemPage; ?> of <?php echo $itemTotalPages; ?> (<?php echo $totalItems; ?> items)</span>
-</div>
-<?php endif; ?>
+<?php if ($totalItems > 0) { tplPager($itemPage, $itemTotalPages, $totalItems, $itemPerPage); } // shared list footer (transferpicklist_pager.php) ?>
 
 <?php if ($maintainCount > 0): ?>
 <div style="margin-top:20px;">

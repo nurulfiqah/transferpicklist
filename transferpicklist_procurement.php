@@ -7,6 +7,8 @@ $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 ini_set('memory_limit', '512M');
 include('../common/index_adv.php');
+require_once(__DIR__ . '/transferpicklist_pager.php');
+require_once(__DIR__ . '/transferpicklist_tableau_links.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
@@ -15,7 +17,7 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 // normal page issue instead of an uncaught fatal error crashing the export.
 mysqli_report(MYSQLI_REPORT_OFF);
 tplT('Login check + database connect (outer app)');
-$_tpl_proc_access = ((int)$transferpicklist_autho >= 1) || ((int)$department === 18);
+$_tpl_proc_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
 if (!$_tpl_proc_access) { redirect('/odb/permission.php'); }
 
 $listType       = isset($_GET['list']) && $_GET['list'] === 'slowmoving' ? 'slowmoving' : 'nonmoving';
@@ -190,7 +192,7 @@ if (isset($_GET['export'])) {
 // ============================================================
 // QUERY — WHERE clause
 // ============================================================
-$perPage = 50;
+$perPage = tplPerPage(50);
 $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset  = ($page - 1) * $perPage;
 
@@ -373,17 +375,7 @@ $pgBase = $baseUrl
             <div style="font-size:16px;font-weight:bold;"><?php echo $syncDate ? date('d M Y', strtotime($syncDate)) : '—'; ?></div>
         </div>
     </div>
-    <div class="alpro-alert alpro-warn" style="margin-top:10px;">
-        <?php if ($listType === 'slowmoving'): ?>
-            This list shows <b>slow-moving items</b> per outlet (flat or downward sales trend). Procurement should review reorder points for these items.
-        <?php else: ?>
-            This list shows <b>6-month non-moving items</b> per outlet. Procurement should set reorder point to <b>0</b> for these items so logistics will not replenish them.
-            <br><br>
-            <b>Avg Past 6M Qty Sold</b> = taken as-is from Tableau (Outlet 6M Non Moving Stock Qty) &nbsp;|&nbsp;
-            <b>MOI</b> = Closing Stock ÷ Avg Past 6M Qty Sold &nbsp;|&nbsp;
-            <b>MOI 0.00</b> = item had <b>zero sales</b> in the past 6 months — these are the most critical items and should be prioritised for reorder point reset to 0.
-        <?php endif; ?>
-    </div>
+    <?php tplTableauLinks($listType === 'slowmoving' ? 'slowmoving' : 'nonmoving'); ?>
 </div>
 
 <!-- FILTER + EXPORT -->
@@ -590,27 +582,11 @@ tplT('Outlet dropdown list');
 </fieldset>
 
 <!-- PAGINATION -->
-<?php if ($totalPages > 1): ?>
-<div style="margin:10px 0; text-align:center;">
-    <a href="<?php echo $pgBase; ?>page=1" class="alpro-btn alpro-btn-grey">&laquo;&laquo; First</a>
-    <?php if ($page > 1): ?>
-        <a href="<?php echo $pgBase; ?>page=<?php echo $page-1; ?>" class="alpro-btn alpro-btn-grey">&laquo; Prev</a>
-    <?php endif; ?>
-    <?php for ($p = max(1,$page-3); $p <= min($totalPages,$page+3); $p++): ?>
-        <a href="<?php echo $pgBase; ?>page=<?php echo $p; ?>"
-           class="alpro-btn <?php echo $p===$page ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"><?php echo $p; ?></a>
-    <?php endfor; ?>
-    <?php if ($page < $totalPages): ?>
-        <a href="<?php echo $pgBase; ?>page=<?php echo $page+1; ?>" class="alpro-btn alpro-btn-grey">Next &raquo;</a>
-    <?php endif; ?>
-    <a href="<?php echo $pgBase; ?>page=<?php echo $totalPages; ?>" class="alpro-btn alpro-btn-grey">Last &raquo;&raquo;</a>
-    <span class="alpro-muted" style="margin-left:10px;">Page <?php echo $page; ?> of <?php echo $totalPages; ?> (<?php echo number_format($totalItems); ?> records)</span>
-</div>
-<?php endif; ?>
+<?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
 
 <?php
 tplT('Build page HTML');
-if (isset($_GET['debug']) && (int)$transferpicklist_autho >= 1):
+if (isset($_GET['debug']) && (int)$transferpicklist_autho === 1):
     $_tplTotal = microtime(true) - $_tplT0;
 ?>
 <div class="alpro-box" style="margin-top:12px; font-size:12px;">

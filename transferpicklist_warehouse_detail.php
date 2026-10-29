@@ -5,7 +5,7 @@ $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
 if (!isset($conn) || !($conn instanceof mysqli)) { die("Database connection not available."); }
-$_wh_det_access = ((int)$transferpicklist_autho >= 1) || ((int)$department === 18);
+$_wh_det_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
 if (!$_wh_det_access) { redirect('/odb/permission.php'); }
 
 $picklistNo = isset($_GET['picklist_no']) ? trim($_GET['picklist_no']) : '';
@@ -254,5 +254,6 @@ table.info-tbl td.val { font-weight:600; color:#2c3e50; text-align:left; width:2
     </div>
 
 </div>
+<?php include(__DIR__ . '/transferpicklist_autofilter.php'); // auto-apply filters ?>
 </body>
 </html>

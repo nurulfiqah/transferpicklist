@@ -25,7 +25,7 @@ include('../common/index_adv.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
-if (!$_tpl_scheduled && (int)$transferpicklist_autho < 3) { redirect('/odb/permission.php'); }
+if (!$_tpl_scheduled && (int)$transferpicklist_autho !== 1) { redirect('/odb/permission.php'); }
 
 ini_set('memory_limit', '512M');
 ini_set('max_execution_time', 30000);

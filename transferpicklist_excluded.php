@@ -3,9 +3,12 @@ require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
+require_once(__DIR__ . '/transferpicklist_pager.php');
 if (!isset($conn) || !($conn instanceof mysqli)) { die("Database connection not available."); }
-if ((int)$transferpicklist_autho < 3) { redirect('/odb/permission.php'); }
+if ((int)$transferpicklist_autho !== 1) { redirect('/odb/permission.php'); }
 require_once('../minmax/minmax_campaign_sync.php');
+require_once(__DIR__ . '/transferpicklist_exclusion_log.php');
+tplExLogEnsure($conn);
 
 // Ensure table exists
 $conn->query("CREATE TABLE IF NOT EXISTS transferpicklist_excluded (
@@ -26,6 +29,12 @@ $chkAt = $conn->query("SHOW COLUMNS FROM transferpicklist_excluded LIKE 'created
 if ($chkAt && $chkAt->num_rows === 0) {
     $conn->query("ALTER TABLE transferpicklist_excluded ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP");
 }
+// "Excluded At — by who" (see database/migrations/2026-10-29_excluded_created_by.sql)
+$chkBy = $conn->query("SHOW COLUMNS FROM transferpicklist_excluded LIKE 'created_by'");
+if ($chkBy && $chkBy->num_rows === 0) {
+    $conn->query("ALTER TABLE transferpicklist_excluded ADD COLUMN created_by VARCHAR(100) NULL AFTER note");
+}
+$_exBy = (isset($nama_staff) && $nama_staff !== '') ? $nama_staff : '';
 
 // ── Helper: parse .xlsx using ZipArchive (no external library needed) ──
 function readXlsxRows($filePath) {
@@ -72,7 +81,8 @@ function readXlsxRows($filePath) {
 
 // ── Helper: insert pairs from parsed rows ──
 function insertExcludedPairs($conn, $rows, $note, $skipHeader) {
-    $added = 0; $skip = 0; $err = 0;
+    global $_exBy;
+    $added = 0; $skip = 0; $err = 0; $addedPairs = array();
     $now   = date('Y-m-d H:i:s');
     $en    = $conn->real_escape_string($note);
     foreach ($rows as $i => $row) {
@@ -83,14 +93,17 @@ function insertExcludedPairs($conn, $rows, $note, $skipHeader) {
         if ($ic === '' || $oc === '') { $err++; continue; }
         $ei = $conn->real_escape_string($ic);
         $eo = $conn->real_escape_string($oc);
-        $conn->query("INSERT IGNORE INTO transferpicklist_excluded (item_code, outlet_code, note, created_at) VALUES ('$ei', '$eo', '$en', '$now')");
+        $eby = $conn->real_escape_string($_exBy);
+        $conn->query("INSERT IGNORE INTO transferpicklist_excluded (item_code, outlet_code, note, created_by, created_at) VALUES ('$ei', '$eo', '$en', '$eby', '$now')");
         if ($conn->affected_rows > 0) {
             $added++;
+            $addedPairs[] = $ic . ' × ' . $oc;
             mmSyncCampaignAdd($conn, $oc, $ic, MM_SYNC_TAG_PER_OUTLET);
         } else {
             $skip++;
         }
     }
+    tplExLog($conn, 'per_outlet', 'insert', $addedPairs, $note);
     return array($added, $skip, $err);
 }
 
@@ -98,55 +111,8 @@ $msg = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = isset($_POST['action']) ? $_POST['action'] : '';
 
-    if ($action === 'add') {
-        $item_code   = strtoupper(trim(isset($_POST['item_code'])   ? $_POST['item_code']   : ''));
-        $outlet_code = strtoupper(trim(isset($_POST['outlet_code']) ? $_POST['outlet_code'] : ''));
-        $note        = trim(isset($_POST['note']) ? $_POST['note'] : '');
-
-        if ($item_code === '' || $outlet_code === '') {
-            $msg = "<span style='color:#c62828;'>Item Code and Outlet Code are required.</span>";
-        } else {
-            $ei = $conn->real_escape_string($item_code);
-            $eo = $conn->real_escape_string($outlet_code);
-            $en = $conn->real_escape_string($note);
-            $now = date('Y-m-d H:i:s');
-            $conn->query("INSERT IGNORE INTO transferpicklist_excluded (item_code, outlet_code, note, created_at) VALUES ('$ei', '$eo', '$en', '$now')");
-            if ($conn->affected_rows > 0) {
-                mmSyncCampaignAdd($conn, $outlet_code, $item_code, MM_SYNC_TAG_PER_OUTLET);
-                $msg = "<span style='color:green;'>Added: <b>$item_code</b> × <b>$outlet_code</b>. This pair will be skipped in next pick list generation.</span>";
-            } else {
-                $msg = "<span style='color:#c62828;'>Already excluded: <b>$item_code</b> × <b>$outlet_code</b>.</span>";
-            }
-        }
-
-    } elseif ($action === 'add_bulk') {
-        $raw   = isset($_POST['bulk_pairs']) ? trim($_POST['bulk_pairs']) : '';
-        $note  = trim(isset($_POST['note'])  ? $_POST['note'] : '');
-        $lines = preg_split('/[\r\n]+/', $raw, -1, PREG_SPLIT_NO_EMPTY);
-        $added = 0; $skip = 0; $err = 0;
-        $now   = date('Y-m-d H:i:s');
-        foreach ($lines as $line) {
-            $parts = preg_split('/[\t,;|]+/', trim($line), 2);
-            if (count($parts) < 2) { $err++; continue; }
-            $ic = strtoupper(trim($parts[0]));
-            $oc = strtoupper(trim($parts[1]));
-            if ($ic === '' || $oc === '') { $err++; continue; }
-            $ei = $conn->real_escape_string($ic);
-            $eo = $conn->real_escape_string($oc);
-            $en = $conn->real_escape_string($note);
-            $conn->query("INSERT IGNORE INTO transferpicklist_excluded (item_code, outlet_code, note, created_at) VALUES ('$ei', '$eo', '$en', '$now')");
-            if ($conn->affected_rows > 0) {
-                $added++;
-                mmSyncCampaignAdd($conn, $oc, $ic, MM_SYNC_TAG_PER_OUTLET);
-            } else {
-                $skip++;
-            }
-        }
-        $msg = "<span style='color:green;'>Added $added pair(s).</span>";
-        if ($skip > 0) { $msg .= " <span style='color:#888;'>$skip already existed.</span>"; }
-        if ($err  > 0) { $msg .= " <span style='color:#c62828;'>$err line(s) skipped (invalid format).</span>"; }
-
-    } elseif ($action === 'download_template') {
+    // (Single Entry / Bulk Paste removed — pairs are added only via Import from Excel/CSV.)
+    if ($action === 'download_template') {
         ob_clean();
         header('Content-Type: text/csv');
         header('Content-Disposition: attachment; filename="excluded_pairs_template.csv"');
@@ -197,21 +163,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pairRes = $conn->query("SELECT item_code, outlet_code FROM transferpicklist_excluded WHERE id=$id");
             $pair    = $pairRes ? $pairRes->fetch_assoc() : null;
             $conn->query("DELETE FROM transferpicklist_excluded WHERE id=$id");
-            if ($pair) { mmSyncCampaignRemove($conn, $pair['outlet_code'], $pair['item_code']); }
+            if ($pair) {
+                mmSyncCampaignRemove($conn, $pair['outlet_code'], $pair['item_code']);
+                tplExLog($conn, 'per_outlet', 'delete', array($pair['item_code'] . ' × ' . $pair['outlet_code']));
+            }
             $msg = "<span style='color:green;'>Removed. This item+outlet pair will now be <b>included</b> in the next pick list generation.</span>";
         }
 
-    } elseif ($action === 'delete_all') {
-        $conn->query("TRUNCATE TABLE transferpicklist_excluded");
-        mmSyncCampaignRemoveAllBySource($conn, MM_SYNC_TAG_PER_OUTLET);
-        $msg = "<span style='color:#c62828;'>All exclusions cleared.</span>";
+    // (Clear All removed — pairs are removed one by one with the bin.)
     }
 }
 
 // Load list with pagination
 $rows    = array();
 $search  = isset($_GET['q'])    ? trim($_GET['q'])    : '';
-$perPage = 50;
+$perPage = tplPerPage(50);
 $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset  = ($page - 1) * $perPage;
 $where   = '';
@@ -229,12 +195,12 @@ $totalPages = max(1, ceil($totalItems / $perPage));
 // ============================================================
 if (isset($_GET['export'])) {
     if (ob_get_level() > 0) { ob_end_clean(); }
-    $exportRes = $conn->query("SELECT item_code, outlet_code, note, created_at FROM transferpicklist_excluded $where ORDER BY created_at DESC");
+    $exportRes = $conn->query("SELECT item_code, outlet_code, note, created_by, created_at FROM transferpicklist_excluded $where ORDER BY created_at DESC");
     $fname = 'transferpicklist_excluded_' . date('Ymd_His') . '.xls';
     $xls  = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<?mso-application progid=\"Excel.Sheet\"?>\n";
     $xls .= "<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\" xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\">\n";
     $xls .= "<Worksheet ss:Name=\"Excluded Pairs\"><Table>\n<Row>";
-    foreach (array('#', 'Item Code', 'Outlet Code', 'Note', 'Excluded At') as $c) {
+    foreach (array('#', 'Item Code', 'Outlet Code', 'Note', 'Excluded At', 'Excluded By') as $c) {
         $xls .= "<Cell><Data ss:Type=\"String\">" . htmlspecialchars($c) . "</Data></Cell>";
     }
     $xls .= "</Row>\n";
@@ -247,6 +213,7 @@ if (isset($_GET['export'])) {
                 . "<Cell><Data ss:Type=\"String\">" . htmlspecialchars($er['outlet_code']) . "</Data></Cell>"
                 . "<Cell><Data ss:Type=\"String\">" . htmlspecialchars($er['note']) . "</Data></Cell>"
                 . "<Cell><Data ss:Type=\"String\">" . htmlspecialchars($er['created_at']) . "</Data></Cell>"
+                . "<Cell><Data ss:Type=\"String\">" . htmlspecialchars((string)$er['created_by']) . "</Data></Cell>"
                 . "</Row>\n";
         }
     }
@@ -258,8 +225,16 @@ if (isset($_GET['export'])) {
     exit;
 }
 
-$res = $conn->query("SELECT id, item_code, outlet_code, note, created_at FROM transferpicklist_excluded $where ORDER BY created_at DESC LIMIT $perPage OFFSET $offset");
+$res = $conn->query("SELECT id, item_code, outlet_code, note, created_by, created_at FROM transferpicklist_excluded $where ORDER BY created_at DESC LIMIT $perPage OFFSET $offset");
 if ($res) { while ($r = $res->fetch_assoc()) { $rows[] = $r; } }
+
+// Item descriptions for the rows on this page (one lookup)
+$exItemNames = array();
+if (!empty($rows)) {
+    $exIn = implode(',', array_map(function($r) use ($conn) { return "'" . $conn->real_escape_string($r['item_code']) . "'"; }, $rows));
+    $nRes = $conn->query("SELECT item_code, name FROM simple WHERE item_code IN ($exIn)");
+    while ($nRes && $n = $nRes->fetch_assoc()) { $exItemNames[$n['item_code']] = $n['name']; }
+}
 ?>
 <!DOCTYPE html>
 <html>
@@ -294,98 +269,39 @@ if ($res) { while ($r = $res->fetch_assoc()) { $rows[] = $r; } }
 </div>
 <?php endif; ?>
 
-<!-- Tabs -->
-<div style="display:flex; gap:4px; margin-bottom:14px;">
-    <button onclick="showTab('single')" id="tab-single" class="alpro-btn alpro-btn-blue" style="font-size:12px;">Single Entry</button>
-    <button onclick="showTab('bulk')"   id="tab-bulk"   class="alpro-btn alpro-btn-grey" style="font-size:12px;">Bulk Paste</button>
-    <button onclick="showTab('import')" id="tab-import" class="alpro-btn alpro-btn-grey" style="font-size:12px;">&#8679; Import Excel / CSV</button>
-</div>
-
-<!-- Single Entry -->
-<div id="form-single">
+<!-- Import Excel/CSV (the only way to add exclusion pairs) — same layout as Excluded Items (Global) -->
 <fieldset style="margin-bottom:16px;">
-    <legend style="font-weight:bold; font-size:13px;">Add Exclusion Pair</legend>
-    <form method="post">
-        <input type="hidden" name="action" value="add">
-        <div style="display:flex; gap:8px; align-items:flex-end;">
-            <div style="flex:0 0 160px;">
-                <label style="font-size:11px; color:#888;">Item Code</label><br>
-                <input type="text" name="item_code" class="alpro-input" style="width:100%; text-transform:uppercase; font-family:monospace;" placeholder="e.g. 100368">
-            </div>
-            <div style="flex:0 0 160px;">
-                <label style="font-size:11px; color:#888;">Outlet Code</label><br>
-                <input type="text" name="outlet_code" class="alpro-input" style="width:100%; text-transform:uppercase; font-family:monospace;" placeholder="e.g. NSBAM1">
-            </div>
-            <div style="flex:1;">
-                <label style="font-size:11px; color:#888;">Note (optional)</label><br>
-                <input type="text" name="note" class="alpro-input" style="width:100%;" placeholder="Reason...">
-            </div>
-            <div>
-                <button type="submit" class="alpro-btn alpro-btn-blue">Add</button>
-            </div>
-        </div>
-    </form>
-</fieldset>
-</div>
-
-<!-- Bulk Entry -->
-<div id="form-bulk" style="display:none;">
-<fieldset style="margin-bottom:16px;">
-    <legend style="font-weight:bold; font-size:13px;">Bulk Add Pairs</legend>
-    <form method="post">
-        <input type="hidden" name="action" value="add_bulk">
-        <div style="display:flex; gap:8px; align-items:flex-start;">
-            <div style="flex:2;">
-                <label style="font-size:11px; color:#888;">Pairs — one per line, format: <code>ITEM_CODE , OUTLET_CODE</code> (comma, tab, pipe or semicolon)</label><br>
-                <textarea name="bulk_pairs" rows="6" class="alpro-input" style="width:100%; font-family:monospace; font-size:12px;" placeholder="100368 , NSBAM1&#10;100449 , QKCBK1&#10;100051101 , BBGS81"></textarea>
-            </div>
-            <div style="flex:1;">
-                <label style="font-size:11px; color:#888;">Note for all (optional)</label><br>
-                <input type="text" name="note" class="alpro-input" style="width:100%;" placeholder="Reason...">
-                <br><br>
-                <button type="submit" class="alpro-btn alpro-btn-blue" style="width:100%;">Add All</button>
-            </div>
-        </div>
-    </form>
-</fieldset>
-</div>
-
-<!-- Import File -->
-<div id="form-import" style="display:none;">
-<fieldset style="margin-bottom:16px;">
-    <legend style="font-weight:bold; font-size:13px;">Import from Excel (.xlsx) or CSV</legend>
+    <legend style="font-weight:bold; font-size:13px;">&#8679; Import from Excel (.xlsx) or CSV</legend>
     <p style="font-size:12px; color:#555; margin:0 0 10px;">
-        File must have <b>2 columns: Item Code, Outlet Code</b> (column A and B). Extra columns are ignored.<br>
-        Excel: save as <b>.xlsx</b>. CSV: comma-separated, UTF-8 encoding.
+        File columns: <b>A = Item Code</b>, <b>B = Outlet Code</b>. Extra columns are ignored.
+        Excel: save as <b>.xlsx</b> &nbsp;|&nbsp; CSV: comma-separated, UTF-8. Imported items are immediately removed from the sync tables.
     </p>
-    <form method="post" style="display:inline; margin-bottom:10px;">
-        <input type="hidden" name="action" value="download_template">
-        <button type="submit" class="alpro-btn alpro-btn-grey" style="font-size:12px;">&#8659; Download Template</button>
-    </form><br><br>
-    <form method="post" enctype="multipart/form-data">
-        <input type="hidden" name="action" value="import_file">
-        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
-            <div style="flex:0 0 300px;">
+    <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+        <form method="post" enctype="multipart/form-data" style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; flex:1 1 auto; margin:0;">
+            <input type="hidden" name="action" value="import_file">
+            <div style="flex:0 0 280px;">
                 <label style="font-size:11px; color:#888;">File (.xlsx or .csv)</label><br>
                 <input type="file" name="import_file" accept=".xlsx,.csv" class="alpro-input" style="width:100%;">
             </div>
             <div style="flex:1; min-width:180px;">
-                <label style="font-size:11px; color:#888;">Note for all imported pairs (optional)</label><br>
-                <input type="text" name="import_note" class="alpro-input" style="width:100%;" placeholder="e.g. July 2026 import">
+                <label style="font-size:11px; color:#888;">Note for all (optional)</label><br>
+                <input type="text" name="import_note" class="alpro-input" style="width:100%;" placeholder="e.g. July exclusion list">
             </div>
             <div style="flex:0 0 auto;">
-                <label style="font-size:11px; color:#888; display:block;">&nbsp;</label>
-                <label style="font-size:12px; display:flex; align-items:center; gap:4px; margin-bottom:6px;">
-                    <input type="checkbox" name="skip_header" value="1" checked> Skip first row (header)
+                <label style="font-size:12px; display:flex; align-items:center; gap:4px; height:32px; white-space:nowrap;">
+                    <input type="checkbox" name="skip_header" value="1" checked> Skip header row
                 </label>
             </div>
-            <div>
+            <div style="flex:0 0 auto;">
                 <button type="submit" class="alpro-btn alpro-btn-blue">Import</button>
             </div>
-        </div>
-    </form>
+        </form>
+        <form method="post" style="margin:0; flex:0 0 auto;">
+            <input type="hidden" name="action" value="download_template">
+            <button type="submit" class="alpro-btn alpro-btn-grey">&#8659; Download Template</button>
+        </form>
+    </div>
 </fieldset>
-</div>
 
 <!-- Search -->
 <form method="get" style="display:flex; gap:8px; margin-bottom:10px; align-items:flex-end;">
@@ -407,25 +323,35 @@ if ($res) { while ($r = $res->fetch_assoc()) { $rows[] = $r; } }
         <th width="30">#</th>
         <th width="120">Outlet Code</th>
         <th width="130">Item Code</th>
-        <th>Note</th>
-        <th width="140">Excluded At</th>
+        <th>Item Description</th>
+        <th width="200">Excluded At</th>
         <th width="60" class="alpro-center">Action</th>
     </tr>
     <?php if (empty($rows)): ?>
     <tr><td colspan="6" class="alpro-center alpro-muted">No exclusion pairs added.</td></tr>
     <?php endif; ?>
-    <?php foreach ($rows as $i => $r): ?>
+    <?php foreach ($rows as $i => $r):
+        $exDesc = isset($exItemNames[$r['item_code']]) && $exItemNames[$r['item_code']] !== '' ? $exItemNames[$r['item_code']] : '';
+    ?>
     <tr>
-        <td class="alpro-center alpro-muted" style="font-size:11px;"><?php echo $i + 1; ?></td>
+        <td class="alpro-center alpro-muted" style="font-size:11px;"><?php echo $offset + $i + 1; ?></td>
         <td><b style="font-family:monospace; color:#1976d2;"><?php echo htmlspecialchars($r['outlet_code']); ?></b></td>
         <td><b style="font-family:monospace;"><?php echo htmlspecialchars($r['item_code']); ?></b></td>
-        <td style="font-size:12px; color:#555;"><?php echo htmlspecialchars($r['note']); ?></td>
-        <td style="font-size:11px; color:#888;"><?php echo htmlspecialchars(substr($r['created_at'], 0, 16)); ?></td>
+        <td>
+            <?php echo htmlspecialchars($exDesc !== '' ? $exDesc : '—'); ?>
+            <?php if (!empty($r['note'])): ?>
+            <div style="font-size:11px; color:#888;">Note: <?php echo htmlspecialchars($r['note']); ?></div>
+            <?php endif; ?>
+        </td>
+        <td style="font-size:12px;">
+            <?php echo htmlspecialchars(date('d M Y, h:i A', strtotime($r['created_at']))); ?>
+            <div style="font-size:11px; color:#888;"><?php echo !empty($r['created_by']) ? 'by ' . htmlspecialchars($r['created_by']) : '&nbsp;'; ?></div>
+        </td>
         <td class="alpro-center">
             <form method="post" style="display:inline;" onsubmit="return confirm('Remove this exclusion?');">
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="id" value="<?php echo (int)$r['id']; ?>">
-                <button type="submit" class="alpro-btn alpro-btn-orange" style="font-size:10px;padding:2px 6px;">Remove</button>
+                <button type="submit" title="Remove" style="background:none; border:none; cursor:pointer; padding:0; font-size:18px; line-height:1; opacity:0.75;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.75">&#128465;</button>
             </form>
         </td>
     </tr>
@@ -433,47 +359,11 @@ if ($res) { while ($r = $res->fetch_assoc()) { $rows[] = $r; } }
 </table>
 </fieldset>
 
-<?php if ($totalPages > 1):
-    $pgBase = 'transferpicklist_excluded.php' . ($search !== '' ? '?q=' . urlencode($search) . '&' : '?') . 'page=';
-?>
-<div style="margin:10px 0; text-align:center;">
-    <?php if ($page > 1): ?>
-        <a href="<?php echo $pgBase; ?>1" class="alpro-btn alpro-btn-grey">&laquo;&laquo;</a>
-        <a href="<?php echo $pgBase . ($page - 1); ?>" class="alpro-btn alpro-btn-grey">&laquo; Prev</a>
-    <?php endif; ?>
-    <?php for ($p = max(1, $page - 3); $p <= min($totalPages, $page + 3); $p++): ?>
-        <a href="<?php echo $pgBase . $p; ?>" class="alpro-btn <?php echo $p === $page ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"><?php echo $p; ?></a>
-    <?php endfor; ?>
-    <?php if ($page < $totalPages): ?>
-        <a href="<?php echo $pgBase . ($page + 1); ?>" class="alpro-btn alpro-btn-grey">Next &raquo;</a>
-        <a href="<?php echo $pgBase . $totalPages; ?>" class="alpro-btn alpro-btn-grey">&raquo;&raquo;</a>
-    <?php endif; ?>
-    <span class="alpro-muted" style="margin-left:10px;">Page <?php echo $page; ?> of <?php echo $totalPages; ?></span>
-</div>
-<?php endif; ?>
+<?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
 
-<div style="margin-top:6px; font-size:11px; color:#aaa; display:flex; justify-content:space-between; align-items:center;">
-    <span>Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $perPage, $totalItems); ?> of <?php echo $totalItems; ?> excluded pair(s).</span>
-    <?php if (!empty($rows)): ?>
-    <form method="post" onsubmit="return confirm('Clear ALL exclusion pairs?');">
-        <input type="hidden" name="action" value="delete_all">
-        <button type="submit" class="alpro-btn alpro-btn-orange" style="font-size:11px;padding:2px 8px;">Clear All</button>
-    </form>
-    <?php endif; ?>
-</div>
 
 </div>
-
-<script>
-function showTab(tab) {
-    document.getElementById('form-single').style.display = tab === 'single' ? '' : 'none';
-    document.getElementById('form-bulk').style.display   = tab === 'bulk'   ? '' : 'none';
-    document.getElementById('form-import').style.display = tab === 'import' ? '' : 'none';
-    document.getElementById('tab-single').className = 'alpro-btn ' + (tab === 'single' ? 'alpro-btn-blue' : 'alpro-btn-grey');
-    document.getElementById('tab-bulk').className   = 'alpro-btn ' + (tab === 'bulk'   ? 'alpro-btn-blue' : 'alpro-btn-grey');
-    document.getElementById('tab-import').className = 'alpro-btn ' + (tab === 'import' ? 'alpro-btn-blue' : 'alpro-btn-grey');
-}
-</script>
+<?php tplExLogRender($conn, 'per_outlet'); ?>
 
 <?php
 $connect = 0;

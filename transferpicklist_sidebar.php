@@ -2,10 +2,10 @@
 $current_page   = basename($_SERVER['PHP_SELF']);
 $_tpl_level        = isset($transferpicklist_autho) ? (int)$transferpicklist_autho : 0;
 $_tpl_dept         = isset($department) ? (int)$department : 0;
-$_tpl_is_super_admin = $_tpl_level >= 3;
-$_tpl_is_admin     = $_tpl_level >= 1;
+$_tpl_is_super_admin = $_tpl_level === 1;
+$_tpl_is_admin     = $_tpl_level === 1;
 $_tpl_is_proc      = $_tpl_is_admin || ($_tpl_dept === 18);
-$_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa === 'Area Manager' || $status_semasa === 'Outlet Manager'));
+$_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa === 'Area Manager' || $status_semasa === 'Outlet Manager')); // My Outlet Tasks
 ?>
 <style>
     .dropdown {
@@ -35,12 +35,18 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
     .dropdown-content a:last-child { border-bottom: none; }
     .dropdown-content a:hover { background-color: #f9f9f9; color: #2980b9; }
     .dropdown:hover .dropdown-content { display: block; }
+    /* Compact, same-size menu buttons (links and dropdown buttons alike) */
+    .tpl-nav .alpro-btn {
+        height: 30px; padding: 0 12px; font-size: 13px; font-weight: 600; line-height: 1;
+        display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; border-radius: 6px;
+    }
+    .tpl-nav-title { margin-right: 10px; color: #2c3e50; font-size: 15px; }
 </style>
 
 <div class="alpro-box" style="margin-bottom:20px; background:#fff; overflow:visible;">
-    <div class="alpro-actions" style="margin-bottom:0; display:flex; align-items:center; flex-wrap:wrap; gap:5px; overflow:visible;">
+    <div class="alpro-actions tpl-nav" style="margin-bottom:0; display:flex; align-items:center; flex-wrap:wrap; gap:5px; overflow:visible;">
 
-        <strong style="margin-right:15px; color:#2c3e50; font-size:16px;">Transfer Pick List</strong>
+        <strong class="tpl-nav-title">Transfer Pick List</strong>
 
         <?php if ($_tpl_is_proc): ?>
         <a href="index.php"
@@ -51,27 +57,45 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
 
         <?php if ($_tpl_has_access): ?>
         <a href="transferpicklist_outlet.php"
-           class="alpro-btn <?php echo ($current_page === 'transferpicklist_outlet.php') ? 'alpro-btn-blue' : 'alpro-btn-green'; ?>">
+           class="alpro-btn <?php echo ($current_page === 'transferpicklist_outlet.php') ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>">
             My Outlet Tasks
         </a>
         <?php endif; ?>
 
         <?php if ($_tpl_is_proc): ?>
-        <a href="transferpicklist_warehouse.php"
-           class="alpro-btn <?php echo ($current_page === 'transferpicklist_warehouse.php') ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>">
-            Warehouse Returns
-        </a>
+        <?php
+        // Activity Log link: when on Warehouse Returns, open it filtered to the pick list being viewed
+        $_wh_log_url = 'transferpicklist_activity_log.php';
+        if ($current_page === 'transferpicklist_warehouse.php' && !empty($filterPicklist)) {
+            $_wh_log_url .= '?picklist_no=' . urlencode($filterPicklist);
+        }
+        ?>
+        <div class="dropdown">
+            <button class="alpro-btn <?php echo in_array($current_page, array('transferpicklist_warehouse.php', 'transferpicklist_warehouse_detail.php', 'transferpicklist_activity_log.php')) ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"
+                    style="cursor:pointer; display:inline-flex; align-items:center; gap:5px; border:none; outline:none;"
+                    onclick="window.location.href='transferpicklist_warehouse.php';">
+                Warehouse Returns &#9662;
+            </button>
+            <div class="dropdown-content">
+                <a href="transferpicklist_warehouse.php">Warehouse Returns</a>
+                <?php if ($_tpl_is_admin): ?>
+                <a href="<?php echo htmlspecialchars($_wh_log_url); ?>">&#128220; Activity Log</a>
+                <?php endif; ?>
+            </div>
+        </div>
         <?php endif; ?>
 
         <?php if ($_tpl_is_proc): ?>
         <div class="dropdown">
-            <button class="alpro-btn <?php echo ($current_page === 'transferpicklist_procurement.php') ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"
+            <button class="alpro-btn <?php echo in_array($current_page, array('transferpicklist_procurement.php', 'transferpicklist_past3months_list.php', 'transferpicklist_itemgrade_list.php')) ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"
                     style="cursor:pointer; display:inline-flex; align-items:center; gap:5px; border:none; outline:none;">
                 Procurement List &#9662;
             </button>
             <div class="dropdown-content">
                 <a href="transferpicklist_procurement.php?list=nonmoving">Non-Moving List</a>
                 <a href="transferpicklist_procurement.php?list=slowmoving">Slow Moving List</a>
+                <a href="transferpicklist_past3months_list.php">Past 3 Months Data</a>
+                <a href="transferpicklist_itemgrade_list.php">Item Grade Data</a>
             </div>
         </div>
         <?php endif; ?>
@@ -126,21 +150,14 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
         </div>
         <?php endif; ?>
 
-        <?php if ($_tpl_is_admin): ?>
-        <div class="dropdown">
-            <?php $_tools_pages = array('transferpicklist_warehouse_import.php','transferpicklist_activity_log.php'); ?>
-            <button class="alpro-btn <?php echo in_array($current_page, $_tools_pages) ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"
-                    style="cursor:pointer; display:inline-flex; align-items:center; gap:5px; border:none; outline:none;">
-                Tools &#9662;
-            </button>
-            <div class="dropdown-content">
-                <?php if ($_tpl_is_super_admin): ?>
-                <a href="transferpicklist_warehouse_import.php">WH Import</a>
-                <?php endif; ?>
-                <a href="transferpicklist_activity_log.php">Activity Log</a>
-            </div>
-        </div>
+        <?php if ($_tpl_is_super_admin): ?>
+        <a href="transferpicklist_admin.php"
+           class="alpro-btn <?php echo ($current_page === 'transferpicklist_admin.php') ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>">
+            Admin Settings
+        </a>
         <?php endif; ?>
 
     </div>
 </div>
+
+<?php include(__DIR__ . '/transferpicklist_autofilter.php'); // auto-apply filter forms on every page ?>

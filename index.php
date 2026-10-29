@@ -10,9 +10,10 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 // return-false-on-error behavior so a transient query failure here doesn't
 // crash the dashboard with a raw fatal error page for every visitor.
 mysqli_report(MYSQLI_REPORT_OFF);
-$_tpl_is_super_admin = (int)$transferpicklist_autho >= 3;
-$_tpl_is_admin = (int)$transferpicklist_autho >= 1;
+$_tpl_is_super_admin = (int)$transferpicklist_autho === 1;
+$_tpl_is_admin = (int)$transferpicklist_autho === 1;
 $_tpl_is_proc  = $_tpl_is_admin || ((int)$department === 18);
+// Dashboard: Super Admin (transferpicklist = 1) and Procurement (dept 18) — both see everything
 if (!$_tpl_is_proc) { redirect('/odb/permission.php'); }
 
 

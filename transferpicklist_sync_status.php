@@ -6,8 +6,8 @@ include('../common/index_adv.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
-if ((int)$transferpicklist_autho < 1) { redirect('/odb/permission.php'); }
-$_sync_is_super = (int)$transferpicklist_autho >= 3;
+if ((int)$transferpicklist_autho !== 1) { redirect('/odb/permission.php'); }
+$_sync_is_super = (int)$transferpicklist_autho === 1;
 
 $filterStatus = isset($_GET['filter']) ? $_GET['filter'] : 'all';
 $filterSearch = isset($_GET['q'])      ? trim($_GET['q']) : '';

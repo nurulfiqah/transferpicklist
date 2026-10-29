@@ -20,7 +20,7 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 // error handling (the per-step checks below) expects the legacy
 // return-false-on-error behavior, so restore it.
 mysqli_report(MYSQLI_REPORT_OFF);
-if (!$_tplAutoGen && (int)$transferpicklist_autho < 3) { redirect('/odb/permission.php'); }
+if (!$_tplAutoGen && (int)$transferpicklist_autho !== 1) { redirect('/odb/permission.php'); }
 
 // ── Auto-generate readiness check ─────────────────────────────
 // Returns a list of reasons NOT to generate (empty = ready).

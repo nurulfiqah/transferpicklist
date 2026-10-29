@@ -8,8 +8,8 @@ require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
-// Admin (transferpicklist_autho >= 1) or Procurement (department 18) — same rule as the Procurement List page
-$_tpl_archive_access = ((int)$transferpicklist_autho >= 1) || ((int)$department === 18);
+// Super Admin (transferpicklist_autho = 1) or Procurement (department 18) — same rule as the Procurement List page
+$_tpl_archive_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
 if (!$_tpl_archive_access) { redirect('/odb/permission.php'); }
 
 $archiveRoot = __DIR__ . '/hyper/csv_archive';

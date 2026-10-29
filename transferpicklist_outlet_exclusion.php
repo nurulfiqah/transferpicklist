@@ -5,7 +5,7 @@ $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
 if (!isset($conn) || !($conn instanceof mysqli)) { die("Database connection not available."); }
-if ((int)$transferpicklist_autho < 3) { redirect('/odb/permission.php'); }
+if ((int)$transferpicklist_autho !== 1) { redirect('/odb/permission.php'); }
 
 // Create/migrate table — simple outlet-level exclusion, no month column
 $conn->query("

@@ -1,30 +1,50 @@
 <?php
+// ── Timing debug: add &debug=1 to the URL (admins only) to see how long each step takes ──
+$_tplT0 = microtime(true); $_tplTimes = array(); $_tplLast = $_tplT0;
+function tplT($label) { global $_tplTimes, $_tplLast; $now = microtime(true); $_tplTimes[] = array($label, $now - $_tplLast); $_tplLast = $now; }
 require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
+require_once(__DIR__ . '/transferpicklist_pager.php');
+require_once(__DIR__ . '/transferpicklist_tableau_links.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
-if ((int)$transferpicklist_autho < 3) { redirect('/odb/permission.php'); }
+mysqli_report(MYSQLI_REPORT_OFF);
+// Super Admin, Super Admin (transferpicklist_autho = 1) or Procurement (department 18) — read-only page
+$_tpl_p3m_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
+if (!$_tpl_p3m_access) { redirect('/odb/permission.php'); }
+tplT('Login check + database connect (outer app)');
 
 $filterOutlet   = isset($_GET['outlet'])    ? trim($_GET['outlet'])    : '';
-$filterItem     = isset($_GET['item_code']) ? trim($_GET['item_code']) : '';
+$filterItem     = isset($_GET['item_code']) ? trim($_GET['item_code']) : ''; // item code OR description
 $filterMonth    = isset($_GET['month'])     ? trim($_GET['month'])     : '';
-$perPage        = 50;
+$perPage        = tplPerPage(50);
 $page           = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset         = ($page - 1) * $perPage;
+
+// Build WHERE (shared by the page and the CSV export)
+// Search matches item code OR item description (same as the Non/Slow Moving search).
+$where = '1=1';
+if ($filterOutlet !== '') { $where .= " AND o.code = '" . $conn->real_escape_string($filterOutlet) . "'"; }
+if ($filterMonth  !== '') { $where .= " AND p.month_year = '" . $conn->real_escape_string($filterMonth) . "'"; }
+if ($filterItem   !== '') {
+    // Look up matching descriptions ONCE in simple, then filter by that literal code list.
+    // (An IN (SELECT ... FROM simple) subquery here took minutes on a 2M-row table.)
+    $escIt   = $conn->real_escape_string($filterItem);
+    $orParts = array("p.item_code LIKE '%$escIt%'");
+    $dRes    = $conn->query("SELECT item_code FROM simple WHERE name LIKE '%$escIt%'");
+    $dCodes  = array();
+    while ($dRes && $d = $dRes->fetch_assoc()) { $dCodes[] = "'" . $conn->real_escape_string($d['item_code']) . "'"; }
+    if (!empty($dCodes)) { $orParts[] = "p.item_code IN (" . implode(',', $dCodes) . ")"; }
+    $where .= " AND (" . implode(' OR ', $orParts) . ")";
+}
 
 // Export CSV
 if (isset($_GET['export'])) {
     ob_end_clean();
     ini_set('memory_limit', '512M');
-
-    $where = '1=1';
-    if ($filterOutlet !== '') { $where .= " AND o.code = '" . $conn->real_escape_string($filterOutlet) . "'"; }
-    if ($filterItem   !== '') { $where .= " AND p.item_code LIKE '%" . $conn->real_escape_string($filterItem) . "%'"; }
-    if ($filterMonth  !== '') { $where .= " AND p.month_year = '" . $conn->real_escape_string($filterMonth) . "'"; }
-
     $res = $conn->query("
         SELECT o.code as outlet_code, o.acmm_id, p.month_year, p.item_code,
                s.name as item_name, p.last_month_closing, p.qty_stock
@@ -37,9 +57,10 @@ if (isset($_GET['export'])) {
     header('Content-Type: text/csv');
     header('Content-Disposition: attachment; filename="past3months_' . date('Ymd') . '.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, array('#', 'Outlet Code', 'Outlet ACMM', 'Month', 'Item Code', 'Item Name', 'Last Month Closing', 'Qty Stock'));
+    // qty_stock holds Tableau's "Quantity Sold" (see hyper/past3m_sync.py) — labelled accordingly
+    fputcsv($out, array('#', 'Outlet Code', 'Outlet ACMM', 'Month', 'Item Code', 'Item Name', 'Last Month Closing Stock Qty', 'Qty Sold'));
     $i = 1;
-    while ($r = $res->fetch_assoc()) {
+    while ($res && $r = $res->fetch_assoc()) {
         $acmm = !empty($r['acmm_id']) ? "'" . str_pad((int)$r['acmm_id'], 4, '0', STR_PAD_LEFT) : '';
         fputcsv($out, array($i++, $r['outlet_code'], $acmm, $r['month_year'], $r['item_code'], $r['item_name'], $r['last_month_closing'], $r['qty_stock']));
     }
@@ -47,26 +68,31 @@ if (isset($_GET['export'])) {
     exit;
 }
 
-// Build WHERE
-$where = '1=1';
-if ($filterOutlet !== '') { $where .= " AND o.code = '" . $conn->real_escape_string($filterOutlet) . "'"; }
-if ($filterItem   !== '') { $where .= " AND p.item_code LIKE '%" . $conn->real_escape_string($filterItem) . "%'"; }
-if ($filterMonth  !== '') { $where .= " AND p.month_year = '" . $conn->real_escape_string($filterMonth) . "'"; }
-
-// Stats
+// Count (filtered)
 $totalRes   = $conn->query("SELECT COUNT(*) as cnt FROM transferpicklist_past3months p JOIN outlet o ON o.id = p.outlet_id WHERE $where");
 $totalItems = $totalRes ? (int)$totalRes->fetch_assoc()['cnt'] : 0;
+tplT('Count records');
 $totalPages = max(1, ceil($totalItems / $perPage));
+$page       = min($page, $totalPages);
+$offset     = ($page - 1) * $perPage;
 
 // Outlet list for dropdown
 $outletRes  = $conn->query("SELECT DISTINCT o.code FROM transferpicklist_past3months p JOIN outlet o ON o.id = p.outlet_id ORDER BY o.code");
 $outletList = array();
-while ($r = $outletRes->fetch_assoc()) { $outletList[] = $r['code']; }
+while ($outletRes && $r = $outletRes->fetch_assoc()) { $outletList[] = $r['code']; }
+tplT('Outlet dropdown');
 
 // Month list for dropdown
 $monthRes  = $conn->query("SELECT DISTINCT month_year FROM transferpicklist_past3months ORDER BY month_year DESC");
 $monthList = array();
-while ($r = $monthRes->fetch_assoc()) { $monthList[] = $r['month_year']; }
+while ($monthRes && $r = $monthRes->fetch_assoc()) { $monthList[] = $r['month_year']; }
+tplT('Month dropdown');
+
+// Data as of = last successful Past 3 Months sync
+$syncDate = '';
+$syncRes  = $conn->query("SELECT MAX(last_sync) AS latest FROM transferpicklist_past3months_status WHERE status = 1");
+if ($syncRes && $sr = $syncRes->fetch_assoc()) { $syncDate = $sr['latest']; }
+tplT('Data as of');
 
 // Main query
 $rows = array();
@@ -80,7 +106,8 @@ $res  = $conn->query("
     ORDER BY o.code, p.month_year DESC, p.item_code
     LIMIT $perPage OFFSET $offset
 ");
-while ($r = $res->fetch_assoc()) { $rows[] = $r; }
+while ($res && $r = $res->fetch_assoc()) { $rows[] = $r; }
+tplT('Load 50 rows (sorted by outlet, month, item)');
 
 // URL builder
 function p3mUrl($params) {
@@ -101,24 +128,6 @@ if ($filterMonth  !== '') { $currentParams['month']     = $filterMonth; }
 <link rel="stylesheet" href="../common/css/alpro-core.css">
 <link rel="stylesheet" href="../common/css/alpro-components.css">
 <link rel="stylesheet" href="../common/css/alpro-utils.css">
-<style>
-    .stat-box { display:inline-block; background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px; padding:12px 20px; margin-right:12px; margin-bottom:10px; text-align:center; min-width:140px; }
-    .stat-box .stat-num { font-size:22px; font-weight:bold; color:#1565c0; }
-    .stat-box .stat-lbl { font-size:12px; color:#666; margin-top:2px; }
-    .tbl-wrap { overflow-x:auto; }
-    table.data-tbl { width:100%; border-collapse:collapse; font-size:13px; }
-    table.data-tbl th { background:#2c3e50; color:#fff; padding:9px 10px; text-align:left; white-space:nowrap; }
-    table.data-tbl td { padding:7px 10px; border-bottom:1px solid #eee; vertical-align:middle; }
-    table.data-tbl tr:hover td { background:#f5f8ff; }
-    .outlet-code { font-weight:600; color:#1565c0; }
-    .filter-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-bottom:15px; }
-    .filter-row label { display:block; font-size:11px; color:#888; margin-bottom:3px; }
-    .filter-row select, .filter-row input[type=text] { padding:6px 10px; border:1px solid #ccc; border-radius:4px; font-size:13px; height:32px; }
-    .pagination { margin-top:15px; display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
-    .pagination a, .pagination span { padding:5px 10px; border:1px solid #ddd; border-radius:4px; font-size:13px; text-decoration:none; color:#333; }
-    .pagination a:hover { background:#eaf0fb; }
-    .pagination .active { background:#1565c0; color:#fff; border-color:#1565c0; font-weight:bold; }
-</style>
 </head>
 <body>
 
@@ -130,147 +139,128 @@ if ($filterMonth  !== '') { $currentParams['month']     = $filterMonth; }
 
 <?php include('transferpicklist_sidebar.php'); ?>
 
+<!-- STATS -->
 <div class="alpro-box">
-
-    <!-- Stats -->
-    <div style="margin-bottom:15px;">
-        <div class="stat-box">
-            <div class="stat-num"><?php echo number_format(count($monthList)); ?></div>
-            <div class="stat-lbl">Months in DB</div>
+    <div class="alpro-grid">
+        <div class="alpro-field">
+            <label class="alpro-muted">Total Outlets</label>
+            <div style="font-size:22px;font-weight:bold;"><?php echo number_format(count($outletList)); ?></div>
         </div>
-        <div class="stat-box">
-            <div class="stat-num"><?php echo number_format(count($outletList)); ?></div>
-            <div class="stat-lbl">Outlets</div>
+        <div class="alpro-field">
+            <label class="alpro-muted">Total Records<?php echo $currentParams ? ' (filtered)' : ''; ?></label>
+            <div style="font-size:22px;font-weight:bold;color:#c62828;"><?php echo number_format($totalItems); ?></div>
         </div>
-        <div class="stat-box">
-            <div class="stat-num" style="color:#1565c0;"><?php echo number_format($totalItems); ?></div>
-            <div class="stat-lbl">Records (filtered)</div>
+        <div class="alpro-field">
+            <label class="alpro-muted">Months</label>
+            <div style="font-size:22px;font-weight:bold;color:#f57c00;"><?php echo number_format(count($monthList)); ?></div>
+        </div>
+        <div class="alpro-field">
+            <label class="alpro-muted">Data As Of</label>
+            <div style="font-size:16px;font-weight:bold;"><?php echo $syncDate ? date('d M Y', strtotime($syncDate)) : '—'; ?></div>
         </div>
     </div>
-
-    <!-- Filter -->
-    <form method="get" action="transferpicklist_past3months_list.php">
-        <div class="filter-row">
-            <div>
-                <label>Outlet</label>
-                <select name="outlet" style="width:150px;">
-                    <option value="">-- All Outlets --</option>
-                    <?php foreach ($outletList as $oc): ?>
-                    <option value="<?php echo htmlspecialchars($oc); ?>" <?php echo $filterOutlet === $oc ? 'selected' : ''; ?>>
-                        <?php echo htmlspecialchars($oc); ?>
-                    </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div>
-                <label>Month</label>
-                <select name="month" style="width:130px;">
-                    <option value="">-- All Months --</option>
-                    <?php foreach ($monthList as $m): ?>
-                    <option value="<?php echo htmlspecialchars($m); ?>" <?php echo $filterMonth === $m ? 'selected' : ''; ?>>
-                        <?php echo htmlspecialchars($m); ?>
-                    </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div>
-                <label>Item Code</label>
-                <input type="text" name="item_code" value="<?php echo htmlspecialchars($filterItem); ?>" placeholder="e.g. 100005719" style="width:160px;">
-            </div>
-            <div>
-                <button type="submit" class="alpro-btn alpro-btn-blue">Search</button>
-                <a href="transferpicklist_past3months_list.php" class="alpro-btn alpro-btn-grey">Clear</a>
-                <?php $expP = $currentParams; $expP['export'] = '1'; ?>
-                <a href="<?php echo p3mUrl($expP); ?>" class="alpro-btn alpro-btn-grey" style="color:#1565c0;">&#8595; Export CSV</a>
-            </div>
-        </div>
-    </form>
-
-    <?php if (empty($rows)): ?>
-    <div class="alpro-alert alpro-success">No records found.</div>
-    <?php else: ?>
-
-    <div style="margin-bottom:8px; font-size:13px; color:#555;">
-        Showing <b><?php echo number_format($offset + 1); ?></b>–<b><?php echo number_format(min($offset + $perPage, $totalItems)); ?></b>
-        of <b><?php echo number_format($totalItems); ?></b> records
-    </div>
-
-    <div class="tbl-wrap">
-    <table class="data-tbl">
-        <thead>
-            <tr>
-                <th>#</th>
-                <th>Outlet</th>
-                <th>Month</th>
-                <th>Item Code</th>
-                <th>Item Description</th>
-                <th>Last Month Closing</th>
-                <th>Qty Stock</th>
-            </tr>
-        </thead>
-        <tbody>
-        <?php
-        $rowNum     = $offset + 1;
-        $lastOutlet = null;
-        foreach ($rows as $r):
-            $acmm      = !empty($r['acmm_id']) ? str_pad((int)$r['acmm_id'], 4, '0', STR_PAD_LEFT) : '';
-            $isNew     = ($r['outlet_code'] !== $lastOutlet);
-            $lastOutlet = $r['outlet_code'];
-        ?>
-        <tr <?php echo $isNew && $rowNum > $offset + 1 ? 'style="border-top:2px solid #cde;"' : ''; ?>>
-            <td style="color:#999;"><?php echo $rowNum++; ?></td>
-            <td>
-                <span class="outlet-code"><?php echo htmlspecialchars($r['outlet_code']); ?></span>
-                <?php if ($acmm): ?>
-                <span style="color:#999; font-size:11px;">(<?php echo $acmm; ?>)</span>
-                <?php endif; ?>
-            </td>
-            <td style="white-space:nowrap;"><?php echo htmlspecialchars($r['month_year']); ?></td>
-            <td style="font-family:monospace;"><?php echo htmlspecialchars($r['item_code']); ?></td>
-            <td><?php echo htmlspecialchars($r['item_name'] ? $r['item_name'] : '—'); ?></td>
-            <td style="text-align:right; font-weight:bold;"><?php echo number_format((float)$r['last_month_closing'], 0); ?></td>
-            <td style="text-align:right; color:#1565c0; font-weight:bold;"><?php echo number_format((float)$r['qty_stock'], 0); ?></td>
-        </tr>
-        <?php endforeach; ?>
-        </tbody>
-    </table>
-    </div>
-
-    <!-- Pagination -->
-    <?php if ($totalPages > 1):
-        $prevP = $currentParams; $prevP['page'] = $page - 1;
-        $nextP = $currentParams; $nextP['page'] = $page + 1;
-        $lastP = $currentParams; $lastP['page'] = $totalPages;
-        $firstP = $currentParams; $firstP['page'] = 1;
-    ?>
-    <div class="pagination">
-        <?php if ($page > 1): ?>
-        <a href="<?php echo p3mUrl($firstP); ?>">&laquo;&laquo; First</a>
-        <a href="<?php echo p3mUrl($prevP); ?>">&laquo; Prev</a>
-        <?php endif; ?>
-        <?php
-        $start = max(1, $page - 3);
-        $end   = min($totalPages, $page + 3);
-        for ($p = $start; $p <= $end; $p++):
-            $pP = $currentParams; $pP['page'] = $p;
-        ?>
-        <?php if ($p === $page): ?>
-        <span class="active"><?php echo $p; ?></span>
-        <?php else: ?>
-        <a href="<?php echo p3mUrl($pP); ?>"><?php echo $p; ?></a>
-        <?php endif; ?>
-        <?php endfor; ?>
-        <?php if ($page < $totalPages): ?>
-        <a href="<?php echo p3mUrl($nextP); ?>">Next &raquo;</a>
-        <a href="<?php echo p3mUrl($lastP); ?>">Last &raquo;&raquo;</a>
-        <?php endif; ?>
-        <span style="color:#888; border:none;">Page <?php echo $page; ?> of <?php echo $totalPages; ?></span>
-    </div>
-    <?php endif; ?>
-
-    <?php endif; ?>
+    <?php tplTableauLinks('past3months'); ?>
 </div>
 
+<!-- FILTER + EXPORT -->
+<style>
+.prc-filter-bar{background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:flex-end;gap:8px;}
+.prc-filter-label{display:block;font-size:11px;color:#888;margin-bottom:4px;text-align:center;}
+.prc-filter-bar input[type=text],.prc-filter-bar select{width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;box-sizing:border-box;height:32px;}
+.prc-filter-bar input[type=text]:focus,.prc-filter-bar select:focus{border-color:#1976d2;outline:none;}
+.prc-filter-grow{flex:1 1 0;min-width:0;}
+.prc-filter-fixed{flex:0 0 auto;white-space:nowrap;}
+</style>
+<form method="get" action="transferpicklist_past3months_list.php">
+<div class="prc-filter-bar">
+    <div class="prc-filter-grow">
+        <span class="prc-filter-label">Search (Item Code / Description)</span>
+        <input type="text" name="item_code" value="<?php echo htmlspecialchars($filterItem); ?>" placeholder="Item code or description...">
+    </div>
+    <div style="flex:0 0 150px;">
+        <span class="prc-filter-label">Outlet Code</span>
+        <select name="outlet">
+            <option value="">-- All --</option>
+            <?php foreach ($outletList as $oc): ?>
+            <option value="<?php echo htmlspecialchars($oc); ?>" <?php echo $filterOutlet === $oc ? 'selected' : ''; ?>><?php echo htmlspecialchars($oc); ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div style="flex:0 0 130px;">
+        <span class="prc-filter-label">Month</span>
+        <select name="month">
+            <option value="">-- All --</option>
+            <?php foreach ($monthList as $m): ?>
+            <option value="<?php echo htmlspecialchars($m); ?>" <?php echo $filterMonth === $m ? 'selected' : ''; ?>><?php echo htmlspecialchars($m); ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div class="prc-filter-fixed">
+        <span class="prc-filter-label">&nbsp;</span>
+        <input type="submit" value="Search" class="alpro-btn alpro-btn-blue" style="height:32px;padding:0 18px;">
+        <a href="transferpicklist_past3months_list.php" class="alpro-btn alpro-btn-grey" style="height:32px;padding:0 18px;line-height:32px;display:inline-block;">Clear</a>
+        <?php $expP = $currentParams; $expP['export'] = '1'; ?>
+        <a href="<?php echo htmlspecialchars(p3mUrl($expP)); ?>" class="alpro-btn alpro-btn-green" style="height:32px;padding:0 18px;line-height:32px;display:inline-block;">&#8659; Export CSV</a>
+    </div>
+</div>
+</form>
+
+<!-- TABLE -->
+<fieldset>
+<table class="myTable alpro-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF">
+    <tr>
+        <th width="30">#</th>
+        <th>Outlet Code</th>
+        <th width="90">Month</th>
+        <th>Item Code</th>
+        <th>Item Description</th>
+        <th>Last Month Closing Stock Qty</th>
+        <th>Qty Sold</th>
+    </tr>
+    <?php if (empty($rows)): ?>
+    <tr><td colspan="7" class="alpro-center alpro-muted">No records found.</td></tr>
+    <?php endif; ?>
+    <?php $rn = $offset + 1; foreach ($rows as $r):
+        $acmm = !empty($r['acmm_id']) ? str_pad((int)$r['acmm_id'], 4, '0', STR_PAD_LEFT) : '';
+    ?>
+    <tr>
+        <td class="alpro-center alpro-muted" style="font-size:11px;"><?php echo $rn++; ?></td>
+        <td class="alpro-mono" style="font-weight:bold;">
+            <?php echo htmlspecialchars($r['outlet_code']); ?>
+            <?php if ($acmm): ?><span class="alpro-muted" style="font-size:11px; font-weight:normal;"> (<?php echo $acmm; ?>)</span><?php endif; ?>
+        </td>
+        <td class="alpro-center"><?php echo htmlspecialchars($r['month_year']); ?></td>
+        <td class="alpro-mono"><?php echo htmlspecialchars($r['item_code']); ?></td>
+        <td><?php echo htmlspecialchars($r['item_name'] ? $r['item_name'] : '—'); ?></td>
+        <td class="alpro-center"><?php echo number_format((float)$r['last_month_closing'], 0); ?></td>
+        <td class="alpro-center" style="font-weight:bold; color:#1565c0;"><?php echo number_format((float)$r['qty_stock'], 0); ?></td>
+    </tr>
+    <?php endforeach; ?>
+</table>
+</fieldset>
+
+<!-- PAGINATION -->
+<?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
+
+<?php
+tplT('Build page HTML');
+if (isset($_GET['debug']) && (int)$transferpicklist_autho === 1):
+    $_tplTotal = microtime(true) - $_tplT0;
+?>
+<div class="alpro-box" style="margin-top:12px; font-size:12px;">
+    <b>Timing debug</b> — total <b><?php echo number_format($_tplTotal, 2); ?>s</b> (server side)
+    <table class="myTable alpro-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF" style="margin-top:6px;">
+        <tr><th style="text-align:left;">Step</th><th class="alpro-center" width="110">Seconds</th><th class="alpro-center" width="90">% of total</th></tr>
+        <?php foreach ($_tplTimes as $_tt): ?>
+        <tr<?php echo $_tt[1] >= 1 ? ' style="background:#fff3e0;"' : ''; ?>>
+            <td><?php echo htmlspecialchars($_tt[0]); ?></td>
+            <td class="alpro-center"><b><?php echo number_format($_tt[1], 3); ?></b></td>
+            <td class="alpro-center"><?php echo $_tplTotal > 0 ? round($_tt[1] / $_tplTotal * 100) : 0; ?>%</td>
+        </tr>
+        <?php endforeach; ?>
+    </table>
+</div>
+<?php endif; ?>
 <?php
 $connect = 0;
 include('../common/index_adv.php');

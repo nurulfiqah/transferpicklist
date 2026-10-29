@@ -11,7 +11,7 @@ $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
 if (!isset($conn) || !($conn instanceof mysqli)) { die("Database connection not available."); }
-if ((int)$transferpicklist_autho < 3) { redirect('/odb/permission.php'); }
+if ((int)$transferpicklist_autho !== 1) { redirect('/odb/permission.php'); }
 
 ini_set('max_execution_time', 0);
 set_time_limit(0);

@@ -3,11 +3,13 @@ require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
+require_once(__DIR__ . '/transferpicklist_pager.php');
 require_once(__DIR__ . '/transferpicklist_route_filter.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
-$_tpl_outlet_access = ((int)$transferpicklist_autho >= 1) || ((int)$department === 18) || (isset($status_semasa) && ($status_semasa === 'Area Manager' || $status_semasa === 'Outlet Manager')) || !empty($outlet_autho);
+// My Outlet Tasks: Super Admin (all outlets) + Area / Outlet Managers (only the outlets in their staff.outlet)
+$_tpl_outlet_access = ((int)$transferpicklist_autho === 1) || (isset($status_semasa) && ($status_semasa === 'Area Manager' || $status_semasa === 'Outlet Manager'));
 if (!$_tpl_outlet_access) { redirect('/odb/permission.php'); }
 
 // Ensure recycle column exists on transferpicklist_item
@@ -15,6 +17,13 @@ $_cr = $conn->query("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA
 if ($_cr && $_cr->num_rows === 0) {
     $conn->query("ALTER TABLE transferpicklist_item ADD COLUMN recycle TINYINT(1) NOT NULL DEFAULT 0");
 }
+// Who confirmed an item and when (see database/migrations/2026-10-29_item_confirmed_by.sql)
+$_cb = $conn->query("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transferpicklist_item' AND COLUMN_NAME = 'confirmed_by' LIMIT 1");
+if ($_cb && $_cb->num_rows === 0) {
+    $conn->query("ALTER TABLE transferpicklist_item ADD COLUMN confirmed_by VARCHAR(100) NULL, ADD COLUMN confirmed_at DATETIME NULL");
+}
+$_confirmBy  = $conn->real_escape_string(isset($nama_staff) && $nama_staff !== '' ? $nama_staff : (isset($_SESSION['myusername']) ? $_SESSION['myusername'] : ''));
+$_confirmSet = "confirmed_by = '$_confirmBy', confirmed_at = NOW()";
 
 $msg      = '';
 $msg_type = '';
@@ -59,7 +68,7 @@ function tplAdminOutletsForPicklist($conn, $picklistNo, $col, $keepCode) {
 }
 
 // Admin override: see all outlets or filter by a selected outlet
-$_is_admin_tpl     = ((int)$transferpicklist_autho >= 1) || ((int)$department === 18);
+$_is_admin_tpl     = ((int)$transferpicklist_autho === 1);
 $filterAdminOutlet = '';
 $adminOutletList   = array();
 if ($_is_admin_tpl) {
@@ -89,6 +98,21 @@ if ($_is_admin_tpl) {
         $myOutletIds = array();
         while ($r = $allORes->fetch_assoc()) { $myOutletIds[] = (int)$r['from_outlet_id']; }
         $outlet_id = !empty($myOutletIds) ? $myOutletIds[0] : 0;
+    }
+}
+
+// Area / Outlet Manager with more than one outlet: dropdown of ONLY their own outlets.
+// A filter_outlet value that isn't one of their outlets is ignored.
+$mgrOutletList = array();
+if (!$_is_admin_tpl && count($myOutletIds) > 1) {
+    $_mRes = $conn->query("SELECT id, code FROM outlet WHERE id IN (" . implode(',', $myOutletIds) . ") ORDER BY code");
+    $_mIds = array();
+    while ($_mRes && $r = $_mRes->fetch_assoc()) { $mgrOutletList[] = $r['code']; $_mIds[$r['code']] = (int)$r['id']; }
+    $_mPick = isset($_GET['filter_outlet']) ? trim($_GET['filter_outlet']) : '';
+    if ($_mPick !== '' && isset($_mIds[$_mPick])) {
+        $filterAdminOutlet = $_mPick;               // reused so pager / export links keep the outlet
+        $myOutletIds       = array($_mIds[$_mPick]);
+        $outlet_id         = $_mIds[$_mPick];
     }
 }
 
@@ -129,10 +153,10 @@ if (!empty($myOutletIds)) {
                     if ($qtyActual < 1)       { $qtyActual = 1; }
                     if ($qtyActual > $maxQty) { $qtyActual = $maxQty; }
                     $safeQty = number_format($qtyActual, 2, '.', '');
-                    $res = $conn->query("UPDATE transferpicklist_item SET status='transferred', qty_actual=$safeQty WHERE id=$item_id AND from_outlet_id IN ($inIds)");
+                    $res = $conn->query("UPDATE transferpicklist_item SET status='transferred', qty_actual=$safeQty, $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
                     if (!$res) {
                         // qty_actual column may not exist yet — update status only
-                        $conn->query("UPDATE transferpicklist_item SET status='transferred' WHERE id=$item_id AND from_outlet_id IN ($inIds)");
+                        $conn->query("UPDATE transferpicklist_item SET status='transferred', $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
                     }
                     $confirmed++;
                 }
@@ -186,7 +210,7 @@ if (!empty($myOutletIds)) {
             $conn->query("
                 UPDATE transferpicklist_item i
                 JOIN transferpicklist_picklist p ON p.id = i.picklist_id AND p.status = 'published'
-                SET i.status = 'transferred'
+                SET i.status = 'transferred', i.confirmed_by = '$_confirmBy', i.confirmed_at = NOW()
                 WHERE $caWhereStr AND i.recycle = 0 AND (i.priority_type != 'warehouse' OR i.return_confirmed = 1)
             ");
             $confirmed = $conn->affected_rows;
@@ -207,7 +231,7 @@ if (!empty($myOutletIds)) {
                 $qtyActual = isset($_POST['qty_actual']) ? (float)$_POST['qty_actual'] : $maxQty;
                 if ($qtyActual < 1)       { $qtyActual = 1; }
                 if ($qtyActual > $maxQty) { $qtyActual = $maxQty; }
-                $conn->query("UPDATE transferpicklist_item SET status='transferred', qty_transfer=$qtyActual WHERE id=$item_id AND from_outlet_id IN ($inIds)");
+                $conn->query("UPDATE transferpicklist_item SET status='transferred', qty_transfer=$qtyActual, $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
                 $msg      = 'Item marked as transferred.';
                 $msg_type = 'success';
             }
@@ -476,7 +500,7 @@ if (!empty($myOutletIds)) {
             exit;
         }
 
-        $perPage    = 50;
+        $perPage    = tplPerPage(50);
         $page       = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
         $offset     = ($page - 1) * $perPage;
 
@@ -586,7 +610,7 @@ if (!empty($myOutletIds)) {
         }
         $whereStr = implode(' AND ', $whereClauses);
 
-        $perPage    = 50;
+        $perPage    = tplPerPage(50);
         $page       = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
         $offset     = ($page - 1) * $perPage;
 
@@ -644,7 +668,8 @@ if (!empty($myOutletIds)) {
 <div class="alpro-alert alpro-<?php echo $msg_type; ?>"><?php echo $msg; ?></div>
 <?php endif; ?>
 <?php if (isset($_GET['confirmed'])): ?>
-<div class="alpro-alert alpro-success"><?php echo (int)$_GET['confirmed']; ?> item(s) confirmed and marked as transferred.</div>
+<div class="alpro-alert alpro-success"><?php echo (int)$_GET['confirmed']; ?> item(s) confirmed and marked as transferred
+    by <b><?php echo htmlspecialchars(isset($nama_staff) && $nama_staff !== '' ? $nama_staff : ''); ?></b> on <?php echo date('d M Y, h:i A'); ?>.</div>
 <?php endif; ?>
 
 <div class="alpro-box" style="margin-bottom:0;">
@@ -671,6 +696,18 @@ if (!empty($myOutletIds)) {
                 <?php foreach ($adminOutletList as $_aoc): ?>
                 <option value="<?php echo htmlspecialchars($_aoc); ?>" <?php echo $filterAdminOutlet === $_aoc ? 'selected' : ''; ?>>
                     <?php echo htmlspecialchars($_aoc); ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <?php elseif (!empty($mgrOutletList)): ?>
+        <div style="flex:0 0 150px;">
+            <span class="tpl-filter-label">Outlet</span>
+            <select name="filter_outlet">
+                <option value="">-- All My Outlets --</option>
+                <?php foreach ($mgrOutletList as $_moc): ?>
+                <option value="<?php echo htmlspecialchars($_moc); ?>" <?php echo $filterAdminOutlet === $_moc ? 'selected' : ''; ?>>
+                    <?php echo htmlspecialchars($_moc); ?>
                 </option>
                 <?php endforeach; ?>
             </select>
@@ -796,6 +833,9 @@ if (!empty($myOutletIds)) {
                 <span style="color:#f57c00;">Pending</span>
             <?php elseif ($item['status'] === 'transferred'): ?>
                 <span style="color:#388e3c;">Confirmed</span>
+                <?php if (!empty($item['confirmed_at'])): ?>
+                <div style="font-size:11px; color:#888; white-space:nowrap;"><?php echo date('d M Y, h:i A', strtotime($item['confirmed_at'])); ?><?php if (!empty($item['confirmed_by'])): ?><br>by <?php echo htmlspecialchars($item['confirmed_by']); ?><?php endif; ?></div>
+                <?php endif; ?>
             <?php else: ?>
                 <span style="color:#c62828;">Rejected</span>
                 <?php if (isset($reassignMap[(int)$item['id']])): ?>
@@ -823,23 +863,7 @@ $pgBase = 'transferpicklist_outlet.php?view=outgoing'
     . ($filterItemType    !== '' ? '&item_type='     . urlencode($filterItemType)    : '')
     . ($filterSearch      !== '' ? '&search='        . urlencode($filterSearch)      : '');
 ?>
-<?php if ($totalPages > 1): ?>
-<div style="margin:10px 0; text-align:center;">
-    <?php if ($page > 1): ?>
-        <a href="<?php echo $pgBase; ?>&page=1" class="alpro-btn alpro-btn-grey">&laquo;&laquo; First</a>
-        <a href="<?php echo $pgBase; ?>&page=<?php echo $page-1; ?>" class="alpro-btn alpro-btn-grey">&laquo; Prev</a>
-    <?php endif; ?>
-    <?php for ($p = max(1,$page-3); $p <= min($totalPages,$page+3); $p++): ?>
-        <a href="<?php echo $pgBase; ?>&page=<?php echo $p; ?>"
-           class="alpro-btn <?php echo $p===$page ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"><?php echo $p; ?></a>
-    <?php endfor; ?>
-    <?php if ($page < $totalPages): ?>
-        <a href="<?php echo $pgBase; ?>&page=<?php echo $page+1; ?>" class="alpro-btn alpro-btn-grey">Next &raquo;</a>
-        <a href="<?php echo $pgBase; ?>&page=<?php echo $totalPages; ?>" class="alpro-btn alpro-btn-grey">Last &raquo;&raquo;</a>
-    <?php endif; ?>
-    <span class="alpro-muted" style="margin-left:10px;">Page <?php echo $page; ?> of <?php echo $totalPages; ?> (<?php echo $totalItems; ?> items)</span>
-</div>
-<?php endif; ?>
+<?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
 
 </form>
 
@@ -867,54 +891,77 @@ $pgBase = 'transferpicklist_outlet.php?view=outgoing'
     $modalTimestamp = date('d M Y, h:i A');
 ?>
 <!-- Confirm All Modal -->
-<div id="confirmAllModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); z-index:9999; align-items:center; justify-content:center;">
-    <div style="background:#fff; border-radius:10px; padding:28px 32px; max-width:460px; width:92%; box-shadow:0 8px 40px rgba(0,0,0,0.25);">
-        <div style="font-size:17px; font-weight:bold; color:#c62828; margin-bottom:18px; border-bottom:2px solid #f5c6c6; padding-bottom:10px;">
-            &#9888; Confirm All Pending Items
+<style>
+.tpl-cm-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:9999;align-items:center;justify-content:center;}
+.tpl-cm{background:#fff;border-radius:12px;width:92%;max-width:440px;box-shadow:0 12px 40px rgba(0,0,0,.25);overflow:hidden;font-size:13px;text-align:left;}
+.tpl-cm-head{display:flex;align-items:center;gap:12px;padding:18px 22px 14px;}
+.tpl-cm-icon{flex:0 0 36px;height:36px;border-radius:50%;background:#e8f5e9;color:#2e7d32;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:bold;}
+.tpl-cm-title{font-size:16px;font-weight:700;color:#222;}
+.tpl-cm-sub{font-size:12px;color:#888;margin-top:2px;}
+.tpl-cm-body{padding:0 22px;}
+.tpl-cm-row{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:9px 0;border-top:1px solid #f0f0f0;}
+.tpl-cm-row:first-child{border-top:none;}
+.tpl-cm-label{color:#888;flex:0 0 auto;}
+.tpl-cm-value{color:#222;font-weight:600;text-align:right;}
+.tpl-cm-value small{display:block;font-weight:normal;color:#888;font-size:11px;margin-top:2px;}
+.tpl-cm-count{font-size:15px;color:#2e7d32;}
+.tpl-cm-warn{margin:12px 22px 0;padding:8px 12px;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;color:#8d6e00;font-size:12px;}
+.tpl-cm-foot{display:flex;justify-content:flex-end;gap:8px;padding:16px 22px 18px;}
+.tpl-cm-btn{height:34px;padding:0 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;}
+.tpl-cm-cancel{background:#fff;border:1px solid #ccc;color:#444;}
+.tpl-cm-cancel:hover{background:#f5f5f5;}
+.tpl-cm-ok{background:#2e7d32;border:none;color:#fff;}
+.tpl-cm-ok:hover{background:#1b5e20;}
+</style>
+<div id="confirmAllModal" class="tpl-cm-overlay" onclick="if(event.target===this){this.style.display='none';}">
+    <div class="tpl-cm">
+        <div class="tpl-cm-head">
+            <div class="tpl-cm-icon">&#10003;</div>
+            <div>
+                <div class="tpl-cm-title">Confirm all pending items?</div>
+                <div class="tpl-cm-sub">They will be marked as transferred.</div>
+            </div>
         </div>
-        <table style="width:100%; font-size:13px; border-collapse:collapse; margin-bottom:18px;">
-            <tr>
-                <td style="padding:7px 0; color:#888; width:150px; vertical-align:top;">Pick List</td>
-                <td style="padding:7px 0; font-weight:bold;"><?php echo htmlspecialchars($modalPlNo); ?>
-                    <?php if ($modalPlDate): ?>
-                    <span style="font-weight:normal; color:#888; font-size:12px;"> &mdash; <?php echo htmlspecialchars($modalPlDate); ?></span>
-                    <?php endif; ?>
-                </td>
-            </tr>
-            <tr style="background:#fafafa;">
-                <td style="padding:7px 0; color:#888; vertical-align:top;">Outlet</td>
-                <td style="padding:7px 0; font-weight:bold;"><?php echo htmlspecialchars($modalOutlet); ?>
-                    <?php if ($modalOutletName): ?>
-                    <br><span style="font-weight:normal; color:#555; font-size:12px;"><?php echo htmlspecialchars($modalOutletName); ?></span>
-                    <?php endif; ?>
-                </td>
-            </tr>
-            <tr>
-                <td style="padding:7px 0; color:#888;">Total Items</td>
-                <td style="padding:7px 0; font-weight:bold; color:#c62828; font-size:16px;"><?php echo number_format($pendingAllCount); ?> pending</td>
-            </tr>
-            <tr style="background:#fafafa;">
-                <td style="padding:7px 0; color:#888;">Confirmed At</td>
-                <td style="padding:7px 0; color:#555;"><?php echo $modalTimestamp; ?></td>
-            </tr>
-        </table>
-        <p style="margin:0 0 20px; font-size:12px; color:#888; border-left:3px solid #e53935; padding-left:10px;">
-            This will confirm <b>all</b> pending items listed above. <b>This action cannot be undone.</b>
-        </p>
-        <div style="display:flex; gap:10px; justify-content:flex-end;">
-            <button type="button" onclick="document.getElementById('confirmAllModal').style.display='none';"
-                style="padding:8px 22px; border:1px solid #ccc; border-radius:4px; background:#fff; cursor:pointer; font-size:14px;">
-                Cancel
-            </button>
-            <button type="button" onclick="document.getElementById('confirmAllForm').submit();"
-                style="padding:8px 26px; background:#e53935; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:14px; font-weight:bold;">
-                &#10003; Yes, Confirm All
-            </button>
+        <div class="tpl-cm-body">
+            <div class="tpl-cm-row">
+                <span class="tpl-cm-label">Pick List</span>
+                <span class="tpl-cm-value"><?php echo htmlspecialchars($modalPlNo); ?>
+                    <?php if ($modalPlDate): ?><small><?php echo htmlspecialchars($modalPlDate); ?></small><?php endif; ?>
+                </span>
+            </div>
+            <div class="tpl-cm-row">
+                <span class="tpl-cm-label">Outlet</span>
+                <span class="tpl-cm-value"><?php echo htmlspecialchars($modalOutlet); ?>
+                    <?php if ($modalOutletName): ?><small><?php echo htmlspecialchars($modalOutletName); ?></small><?php endif; ?>
+                </span>
+            </div>
+            <div class="tpl-cm-row">
+                <span class="tpl-cm-label">Items</span>
+                <span class="tpl-cm-value tpl-cm-count"><?php echo number_format($pendingAllCount); ?> pending</span>
+            </div>
+            <div class="tpl-cm-row">
+                <span class="tpl-cm-label">Confirmed At</span>
+                <span class="tpl-cm-value" style="font-weight:normal;"><?php echo $modalTimestamp; ?></span>
+            </div>
+        </div>
+        <div class="tpl-cm-warn">&#9888; This can't be undone.</div>
+        <div class="tpl-cm-foot">
+            <button type="button" class="tpl-cm-btn tpl-cm-cancel" onclick="document.getElementById('confirmAllModal').style.display='none';">Cancel</button>
+            <button type="button" class="tpl-cm-btn tpl-cm-ok" onclick="this.disabled=true; document.getElementById('confirmAllForm').submit();">&#10003; Yes, Confirm All</button>
         </div>
     </div>
 </div>
 
-<div style="margin-top:10px; text-align:right;">
+<style>
+.tpl-confirm-bar{margin-top:10px;display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;}
+.tpl-confirm-hint{font-size:12px;color:#777;}
+.tpl-confirm-btn{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 14px 0 16px;font-size:13px;font-weight:600;
+    background:#2e7d32;color:#fff;border:none;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.15);transition:background .15s;}
+.tpl-confirm-btn:hover{background:#1b5e20;}
+.tpl-confirm-count{background:rgba(255,255,255,.22);border-radius:10px;padding:1px 8px;font-size:12px;}
+</style>
+<div class="tpl-confirm-bar">
+    <span class="tpl-confirm-hint">Confirms every pending item in the current filter, on all pages</span>
     <form id="confirmAllForm" method="post" style="display:inline;">
         <input type="hidden" name="confirm_all"  value="1">
         <input type="hidden" name="ca_picklist"  value="<?php echo htmlspecialchars($filterPicklist); ?>">
@@ -922,9 +969,8 @@ $pgBase = 'transferpicklist_outlet.php?view=outgoing'
         <input type="hidden" name="ca_item_type" value="<?php echo htmlspecialchars($filterItemType); ?>">
         <input type="hidden" name="ca_search"    value="<?php echo htmlspecialchars($filterSearch); ?>">
     </form>
-    <button type="button" onclick="document.getElementById('confirmAllModal').style.display='flex';"
-        style="padding:8px 28px;font-size:14px;background:#e53935;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold;">
-        &#10003; Confirm All (<?php echo $pendingAllCount; ?> pending)
+    <button type="button" class="tpl-confirm-btn" onclick="document.getElementById('confirmAllModal').style.display='flex';">
+        &#10003; Confirm All <span class="tpl-confirm-count"><?php echo (int)$pendingAllCount; ?> pending</span>
     </button>
 </div>
 <?php endif; ?>
@@ -978,6 +1024,9 @@ $pgBase = 'transferpicklist_outlet.php?view=outgoing'
                 <span style="color:#f57c00;">Pending</span>
             <?php elseif ($item['status'] === 'transferred'): ?>
                 <span style="color:#388e3c;">Confirmed</span>
+                <?php if (!empty($item['confirmed_at'])): ?>
+                <div style="font-size:11px; color:#888; white-space:nowrap;"><?php echo date('d M Y, h:i A', strtotime($item['confirmed_at'])); ?><?php if (!empty($item['confirmed_by'])): ?><br>by <?php echo htmlspecialchars($item['confirmed_by']); ?><?php endif; ?></div>
+                <?php endif; ?>
             <?php else: ?>
                 <span style="color:#c62828;">Cancelled</span>
             <?php endif; ?>
@@ -993,23 +1042,7 @@ $pgBase = 'transferpicklist_outlet.php?view=incoming'
     . ($filterStatus    !== '' ? '&status='      . urlencode($filterStatus)    : '')
     . ($filterItemCode  !== '' ? '&item_code='   . urlencode($filterItemCode)  : '');
 ?>
-<?php if ($totalPages > 1): ?>
-<div style="margin:10px 0; text-align:center;">
-    <?php if ($page > 1): ?>
-        <a href="<?php echo $pgBase; ?>&page=1" class="alpro-btn alpro-btn-grey">&laquo;&laquo; First</a>
-        <a href="<?php echo $pgBase; ?>&page=<?php echo $page-1; ?>" class="alpro-btn alpro-btn-grey">&laquo; Prev</a>
-    <?php endif; ?>
-    <?php for ($p = max(1,$page-3); $p <= min($totalPages,$page+3); $p++): ?>
-        <a href="<?php echo $pgBase; ?>&page=<?php echo $p; ?>"
-           class="alpro-btn <?php echo $p===$page ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"><?php echo $p; ?></a>
-    <?php endfor; ?>
-    <?php if ($page < $totalPages): ?>
-        <a href="<?php echo $pgBase; ?>&page=<?php echo $page+1; ?>" class="alpro-btn alpro-btn-grey">Next &raquo;</a>
-        <a href="<?php echo $pgBase; ?>&page=<?php echo $totalPages; ?>" class="alpro-btn alpro-btn-grey">Last &raquo;&raquo;</a>
-    <?php endif; ?>
-    <span class="alpro-muted" style="margin-left:10px;">Page <?php echo $page; ?> of <?php echo $totalPages; ?> (<?php echo $totalItems; ?> items)</span>
-</div>
-<?php endif; ?>
+<?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
 <?php endif; ?>
 
 <?php

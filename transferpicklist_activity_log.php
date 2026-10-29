@@ -3,21 +3,24 @@ require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
+require_once(__DIR__ . '/transferpicklist_pager.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
 mysqli_report(MYSQLI_REPORT_OFF);
 // Admin (status 1) and super admin (status 3)
-if ((int)$transferpicklist_autho < 1) { redirect('/odb/permission.php'); }
+if ((int)$transferpicklist_autho !== 1) { redirect('/odb/permission.php'); }
 
 $filterPicklist = isset($_GET['picklist_no']) ? trim($_GET['picklist_no']) : '';
 $filterUser     = isset($_GET['user'])        ? trim($_GET['user'])        : '';
 $filterSearch   = isset($_GET['search'])      ? trim($_GET['search'])      : '';
 $page           = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-$perPage        = 50;
+$perPage        = tplPerPage(50);
 
-// Build WHERE clause
-$where  = array('1=1');
+// Build WHERE clause — Warehouse Returns only: every action on transferpicklist_warehouse.php
+// (confirm ticks, deletes, warehouse changes, Confirm All) is logged against the
+// "<base>-warehouse" pick list, so only those pick lists are shown here.
+$where  = array("p.picklist_no LIKE '%-warehouse'");
 $types  = '';
 $params = array();
 
@@ -27,9 +30,9 @@ if ($filterPicklist !== '') {
     $params[] = $filterPicklist;
 }
 if ($filterUser !== '') {
-    $where[]  = 'l.by_user LIKE ?';
+    $where[]  = 'l.by_user = ?';
     $types   .= 's';
-    $params[] = '%' . $filterUser . '%';
+    $params[] = $filterUser;
 }
 if ($filterSearch !== '') {
     $where[]  = 'l.action LIKE ?';
@@ -67,9 +70,20 @@ $rows = array();
 while ($r = $res->fetch_assoc()) { $rows[] = $r; }
 $stmt->close();
 
+// User dropdown — only staff who actually have Warehouse Returns activity
+// (narrowed to the selected pick list when one is chosen)
+$userOptions = array();
+$_uSql = "SELECT DISTINCT l.by_user FROM transferpicklist_log l JOIN transferpicklist_picklist p ON p.id = l.picklist_id
+          WHERE p.picklist_no LIKE '%-warehouse' AND l.by_user IS NOT NULL AND l.by_user != ''"
+       . ($filterPicklist !== '' ? " AND p.picklist_no = '" . $conn->real_escape_string($filterPicklist) . "'" : "")
+       . " ORDER BY l.by_user";
+$_uRes = $conn->query($_uSql);
+if ($_uRes) { while ($r = $_uRes->fetch_assoc()) { $userOptions[] = $r['by_user']; } }
+if ($filterUser !== '' && !in_array($filterUser, $userOptions, true)) { $userOptions[] = $filterUser; sort($userOptions); }
+
 // Pick list options for filter dropdown
 $picklistOptions = array();
-$plRes = $conn->query("SELECT p.picklist_no FROM transferpicklist_picklist p ORDER BY p.timestamp DESC LIMIT 200");
+$plRes = $conn->query("SELECT p.picklist_no FROM transferpicklist_picklist p WHERE p.picklist_no LIKE '%-warehouse' ORDER BY p.timestamp DESC LIMIT 200");
 if ($plRes) { while ($r = $plRes->fetch_assoc()) { $picklistOptions[] = $r['picklist_no']; } }
 
 function buildLogUrl($params) {
@@ -84,7 +98,7 @@ $currentParams = array(
 <!DOCTYPE html>
 <html>
 <head>
-<title>Activity Log</title>
+<title>Warehouse Returns – Activity Log</title>
 <link rel="stylesheet" href="../common/css/layout.css">
 <link rel="stylesheet" href="../common/css/page.css">
 <link rel="stylesheet" href="../common/css/alpro-core.css">
@@ -100,7 +114,7 @@ $currentParams = array(
 
 <div class="header">
     <b class="rtop"><b class="r1"></b><b class="r2"></b><b class="r3"></b><b class="r4"></b></b>
-    <h1 class="headerH1"><img src="../common/img/library2.png"> Activity Log</h1>
+    <h1 class="headerH1"><img src="../common/img/library2.png"> Warehouse Returns – Activity Log</h1>
     <b class="rbottom"><b class="r4"></b><b class="r3"></b><b class="r2"></b><b class="r1"></b></b>
 </div>
 
@@ -109,9 +123,9 @@ $currentParams = array(
 <div class="alpro-box">
     <form method="get" action="transferpicklist_activity_log.php">
         <div class="filter-bar">
-            <div>
+            <div style="flex:1 1 0; min-width:200px;">
                 <label>Pick List</label>
-                <select name="picklist_no" style="width:220px;">
+                <select name="picklist_no" style="width:100%;">
                     <option value="">-- All Pick Lists --</option>
                     <?php foreach ($picklistOptions as $opt): ?>
                     <option value="<?php echo htmlspecialchars($opt); ?>" <?php echo $filterPicklist === $opt ? 'selected' : ''; ?>>
@@ -120,15 +134,20 @@ $currentParams = array(
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div>
+            <div style="flex:1 1 0; min-width:160px;">
                 <label>User</label>
-                <input type="text" name="user" value="<?php echo htmlspecialchars($filterUser); ?>" placeholder="Staff name" style="width:160px;">
+                <select name="user" style="width:100%;">
+                    <option value="">-- All Staff --</option>
+                    <?php foreach ($userOptions as $_u): ?>
+                    <option value="<?php echo htmlspecialchars($_u); ?>" <?php echo $filterUser === $_u ? 'selected' : ''; ?>><?php echo htmlspecialchars($_u); ?></option>
+                    <?php endforeach; ?>
+                </select>
             </div>
-            <div>
+            <div style="flex:2 1 0; min-width:200px;">
                 <label>Search Action</label>
-                <input type="text" name="search" value="<?php echo htmlspecialchars($filterSearch); ?>" placeholder="e.g. deleted, warehouse..." style="width:220px;">
+                <input type="text" name="search" value="<?php echo htmlspecialchars($filterSearch); ?>" placeholder="e.g. deleted, warehouse..." style="width:100%;">
             </div>
-            <div style="margin-left:auto; display:flex; gap:8px;">
+            <div style="display:flex; gap:8px; flex:0 0 auto;">
                 <button type="submit" class="alpro-btn alpro-btn-blue" style="height:32px; min-width:80px; padding:0 16px; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;">Filter</button>
                 <a href="transferpicklist_activity_log.php" class="alpro-btn alpro-btn-grey" style="height:32px; min-width:80px; padding:0 16px; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;">Reset</a>
             </div>
@@ -160,26 +179,7 @@ $currentParams = array(
         <?php endforeach; ?>
     </table>
 
-    <?php if ($totalPages > 1): ?>
-    <div class="pagination">
-        <?php $prevParams = $currentParams; $prevParams['page'] = $page - 1; ?>
-        <?php $nextParams = $currentParams; $nextParams['page'] = $page + 1; ?>
-        <?php if ($page > 1): ?>
-        <a href="<?php echo buildLogUrl($prevParams); ?>">&laquo; Prev</a>
-        <?php endif; ?>
-        <?php for ($p = max(1, $page - 3); $p <= min($totalPages, $page + 3); $p++):
-            $pParams = $currentParams; $pParams['page'] = $p; ?>
-        <?php if ($p === $page): ?>
-        <span class="active"><?php echo $p; ?></span>
-        <?php else: ?>
-        <a href="<?php echo buildLogUrl($pParams); ?>"><?php echo $p; ?></a>
-        <?php endif; ?>
-        <?php endfor; ?>
-        <?php if ($page < $totalPages): ?>
-        <a href="<?php echo buildLogUrl($nextParams); ?>">Next &raquo;</a>
-        <?php endif; ?>
-    </div>
-    <?php endif; ?>
+    <?php if ($total > 0) { tplPager($page, $totalPages, $total, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
 </div>
 
 </body>

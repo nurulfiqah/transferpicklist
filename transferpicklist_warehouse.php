@@ -8,6 +8,7 @@ require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
+require_once(__DIR__ . '/transferpicklist_pager.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
@@ -32,10 +33,10 @@ if ((int)$department > 0) {
 }
 // separate from the department/BU/autho-based grants above.
 $_wh_is_individually_granted = in_array((int)$department, array(22, 29, 30), true); // WLD (HQ), WLD (Sabah), WLD (Sarawak)
-$_wh_is_proc = ((int)$transferpicklist_autho >= 1) || ((int)$department === 18) || $_wh_is_bu || $_wh_is_individually_granted;
+$_wh_is_proc = ((int)$transferpicklist_autho === 1) || ((int)$department === 18) || $_wh_is_bu || $_wh_is_individually_granted;
 if (!$_wh_is_proc) { redirect('/odb/permission.php'); }
-$_wh_is_super_admin = (int)$transferpicklist_autho >= 3;
-$_wh_is_admin       = (int)$transferpicklist_autho >= 1;
+$_wh_is_super_admin = (int)$transferpicklist_autho === 1;
+$_wh_is_admin       = (int)$transferpicklist_autho === 1;
 
 $filterPicklist   = isset($_GET['picklist_no']) ? trim($_GET['picklist_no']) : '';
 $filterSearch     = isset($_GET['search'])      ? trim($_GET['search'])      : '';
@@ -458,10 +459,12 @@ if ($whOptRes) {
 
 // Load picklist list FIRST so we can set the default $filterPicklist before running heavy queries
 $picklistOptions = array();
+// EXISTS + the (picklist_id, priority_type, recycle) index = one index probe per
+// pick list, instead of joining every warehouse item of every pick list (~4s on production).
 $_plRes = $conn->query("
-    SELECT DISTINCT p.id, p.picklist_no, p.status, p.timestamp
+    SELECT p.id, p.picklist_no, p.status, p.timestamp
     FROM transferpicklist_picklist p
-    JOIN transferpicklist_item i ON i.picklist_id = p.id AND i.priority_type = 'warehouse'
+    WHERE EXISTS (SELECT 1 FROM transferpicklist_item i WHERE i.picklist_id = p.id AND i.priority_type = 'warehouse')
     ORDER BY p.timestamp DESC
 ");
 if ($_plRes) { while ($r = $_plRes->fetch_assoc()) { $picklistOptions[] = $r; } }
@@ -507,7 +510,7 @@ if ($filterPicklistId > 0) {
 }
 tplT('Current warehouse per region');
 
-$perPage = 50;
+$perPage = tplPerPage(50);
 $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset  = ($page - 1) * $perPage;
 
@@ -523,12 +526,31 @@ $_icCodes = array();
 if ($_icRes) { while ($r = $_icRes->fetch_assoc()) { $_icCodes[] = "'" . $conn->real_escape_string($r['item_code']) . "'"; } }
 tplT('Item codes in this pick list');
 
-// Step 2: get distinct procurement_officer from simple using those item_codes (no JOIN)
+// Step 2: P.Officer / Model / Return / Ownership dropdown options — ONE pass over simple
+// for this pick list's item codes (was 4 separate lookups with the same long IN list).
+$modelList     = array();
+$returnList    = array();
+$ownershipList = array();
 if (!empty($_icCodes)) {
-    $offRes = $conn->query("SELECT DISTINCT procurement_officer FROM simple WHERE item_code IN (" . implode(',', $_icCodes) . ") AND procurement_officer != '' AND procurement_officer IS NOT NULL ORDER BY procurement_officer");
-    if ($offRes) { while ($r = $offRes->fetch_assoc()) { if ($r['procurement_officer'] !== '') { $officerList[] = $r['procurement_officer']; } } }
+    $_optSets = array('procurement_officer' => array(), 'model' => array(), 'hq_return_policy' => array(), 'product_ownership' => array());
+    $optRes = $conn->query("SELECT DISTINCT procurement_officer, model, hq_return_policy, product_ownership FROM simple WHERE item_code IN (" . implode(',', $_icCodes) . ")");
+    if ($optRes) {
+        while ($r = $optRes->fetch_assoc()) {
+            foreach ($_optSets as $_col => $_set) {
+                if ($r[$_col] !== null && $r[$_col] !== '') { $_optSets[$_col][$r[$_col]] = true; }
+            }
+        }
+    }
+    // Same order the old ORDER BY gave (case-insensitive A–Z). array_keys() turns numeric-looking
+    // values (e.g. officer code "12345678") into ints — cast back to string so the dropdown's
+    // `=== $filterOfficer` "selected" check still matches.
+    foreach ($_optSets as $_col => $_set) { $_optSets[$_col] = array_map('strval', array_keys($_set)); usort($_optSets[$_col], 'strcasecmp'); }
+    $officerList   = $_optSets['procurement_officer'];
+    $modelList     = $_optSets['model'];
+    $returnList    = $_optSets['hq_return_policy'];
+    $ownershipList = $_optSets['product_ownership'];
 }
-tplT('P.Officer dropdown (item master lookup)');
+tplT('P.Officer / Model / Return / Ownership dropdowns (1 item master lookup)');
 
 // Step 3: get staff names using username column (same logic as original)
 if (!empty($officerList)) {
@@ -546,20 +568,6 @@ if (!empty($officerList)) {
 }
 tplT('Staff names (whole staff table)');
 
-// Model / Return / Ownership option lists (from simple, scoped to current picklist's items)
-$modelList     = array();
-$returnList    = array();
-$ownershipList = array();
-if (!empty($_icCodes)) {
-    $_icIn = implode(',', $_icCodes);
-    $mdRes = $conn->query("SELECT DISTINCT model FROM simple WHERE item_code IN ($_icIn) AND model != '' AND model IS NOT NULL ORDER BY model");
-    if ($mdRes) { while ($r = $mdRes->fetch_assoc()) { if ($r['model'] !== '') { $modelList[] = $r['model']; } } }
-    $rtRes = $conn->query("SELECT DISTINCT hq_return_policy FROM simple WHERE item_code IN ($_icIn) AND hq_return_policy != '' AND hq_return_policy IS NOT NULL ORDER BY hq_return_policy");
-    if ($rtRes) { while ($r = $rtRes->fetch_assoc()) { if ($r['hq_return_policy'] !== '') { $returnList[] = $r['hq_return_policy']; } } }
-    $owRes = $conn->query("SELECT DISTINCT product_ownership FROM simple WHERE item_code IN ($_icIn) AND product_ownership != '' AND product_ownership IS NOT NULL ORDER BY product_ownership");
-    if ($owRes) { while ($r = $owRes->fetch_assoc()) { if ($r['product_ownership'] !== '') { $ownershipList[] = $r['product_ownership']; } } }
-}
-tplT('Model / Return / Ownership dropdowns (3 item master lookups)');
 
 // Outlet dropdown — direct picklist_id filter, no JOIN to picklist table
 $outletList = array();
@@ -642,6 +650,31 @@ $whereStr = implode(' AND ', $whereClauses);
 $_plJoin  = $needPicklistJoin ? "JOIN transferpicklist_picklist p ON p.id = i.picklist_id" : "";
 tplT('Apply filters');
 
+// AJAX: Confirm Return for EVERY item matching the current filter (all pages), not just
+// the 50 rows on screen. Posted to this page WITH the current query string, so $whereStr
+// above is exactly the list the user is looking at.
+if (isset($_POST['ajax']) && $_POST['ajax'] === 'confirm_filtered') {
+    while (ob_get_level() > 0) { ob_end_clean(); }
+    header('Content-Type: application/json');
+    if ($filterPicklistId <= 0) { echo json_encode(array('ok' => false, 'msg' => 'Please select a picklist first.')); exit; }
+    if ($isReadOnly)            { echo json_encode(array('ok' => false, 'msg' => 'Picklist is published. Read-only.')); exit; }
+    $state = (isset($_POST['state']) && (int)$_POST['state'] === 1) ? 1 : 0;
+    $cRes  = $conn->query("SELECT COUNT(DISTINCT i.item_code) AS items FROM transferpicklist_item i $_plJoin WHERE $whereStr");
+    $items = $cRes ? (int)$cRes->fetch_assoc()['items'] : 0;
+    $ok    = $conn->query("UPDATE transferpicklist_item i $_plJoin SET i.return_confirmed = $state WHERE $whereStr");
+    if (!$ok) { echo json_encode(array('ok' => false, 'msg' => 'Update failed: ' . $conn->error)); exit; }
+    $rowsChanged = $conn->affected_rows;
+    $filterDesc  = array();
+    foreach (array('outlet' => $filterOutlet, 'officer' => $filterOfficer, 'model' => $filterModel, 'return' => $filterReturn,
+                   'ownership' => $filterOwnership, 'status' => $filterStatus, 'search' => $filterSearch, 'confirm' => $filterConfirm) as $_k => $_v) {
+        if ($_v !== '') { $filterDesc[] = "$_k=$_v"; }
+    }
+    logWhAction($conn, $filterPicklistId, ($state ? 'Confirmed' : 'Unconfirmed') . " return-to-warehouse for ALL $items item(s) in filter"
+        . ($filterDesc ? ' (' . implode(', ', $filterDesc) . ')' : ' (no filter)') . " — $rowsChanged row(s) changed");
+    echo json_encode(array('ok' => true, 'items' => $items, 'rows' => $rowsChanged, 'state' => $state));
+    exit;
+}
+
 // Export CSV — joins simple directly, no preload needed
 if (isset($_GET['export'])) {
     ob_end_clean();
@@ -688,6 +721,12 @@ $cntRes = $conn->query("
 ");
 if ($cntRes) { $totalItems = (int)$cntRes->fetch_assoc()['cnt']; }
 $totalPages = max(1, ceil($totalItems / $perPage));
+// Header "confirm all" checkbox: ticked only when EVERY row in the current filter is confirmed
+$allFilteredConfirmed = false;
+if ($totalItems > 0 && !$isReadOnly && $filterPicklistId > 0) {
+    $acRes = $conn->query("SELECT MIN(i.return_confirmed) AS m FROM transferpicklist_item i $_plJoin WHERE $whereStr");
+    $allFilteredConfirmed = $acRes && ((int)$acRes->fetch_assoc()['m'] === 1);
+}
 tplT('Count items');
 
 // Stats
@@ -806,8 +845,8 @@ table.wh-tbl td { padding:6px 10px; border-bottom:1px solid #eee; vertical-align
 table.wh-tbl tr:hover td { background:#f5f8ff; }
 .badge-hq  { background:#1565c0; color:#fff; border-radius:3px; padding:2px 6px; font-size:11px; font-weight:bold; }
 .badge-nhq { background:#e67e22; color:#fff; border-radius:3px; padding:2px 6px; font-size:11px; font-weight:bold; }
-.filter-bar { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:12px 14px; }
-.filter-bar label { display:block; font-size:11px; color:#888; margin-bottom:3px; }
+.filter-bar { display:flex; gap:6px; align-items:flex-end; flex-wrap:wrap; margin-bottom:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px 10px; }
+.filter-bar label { display:block; font-size:11px; color:#888; margin-bottom:2px; white-space:nowrap; }
 .filter-bar select, .filter-bar input[type=text] { padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px; height:32px; box-sizing:border-box; }
 .pagination { margin-top:12px; display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
 .pagination a, .pagination span { padding:4px 10px; border:1px solid #ddd; border-radius:4px; font-size:12px; text-decoration:none; color:#333; }
@@ -827,20 +866,13 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
 
 <div class="alpro-box">
 
-    <?php if ($_wh_is_admin): ?>
-    <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
-        <a href="transferpicklist_activity_log.php<?php echo $filterPicklist ? '?picklist_no=' . urlencode($filterPicklist) : ''; ?>" style="background:#455a64; color:#fff; text-decoration:none; cursor:pointer; padding:6px 14px; border-radius:4px; font-size:13px; font-weight:bold; display:inline-block;">
-            &#128220; View Activity Log
-        </a>
-    </div>
-    <?php endif; ?>
 
-    <!-- Filter -->
-    <form method="get" action="transferpicklist_warehouse.php">
+    <!-- Filter (applies automatically — see "Auto-apply filters" in the script below) -->
+    <form method="get" action="transferpicklist_warehouse.php" id="wh-filter-form">
         <div class="filter-bar">
             <div>
                 <label>Pick List</label>
-                <select name="picklist_no" style="width:200px;">
+                <select name="picklist_no" style="width:185px;">
                     <option value="">-- All Pick Lists --</option>
                     <?php foreach ($picklistOptions as $opt): ?>
                     <option value="<?php echo htmlspecialchars($opt['picklist_no']); ?>" <?php echo $filterPicklist === $opt['picklist_no'] ? 'selected' : ''; ?>>
@@ -853,7 +885,7 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
             </div>
             <div>
                 <label>Model</label>
-                <select name="model" style="width:160px;">
+                <select name="model" style="width:120px;">
                     <option value="">-- All Models --</option>
                     <?php foreach ($modelList as $md): ?>
                     <option value="<?php echo htmlspecialchars($md); ?>" <?php echo $filterModel === $md ? 'selected' : ''; ?>>
@@ -864,7 +896,7 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
             </div>
             <div>
                 <label>Return</label>
-                <select name="hq_return" style="width:120px;">
+                <select name="hq_return" style="width:100px;">
                     <option value="">-- All --</option>
                     <?php foreach ($returnList as $rt): ?>
                     <option value="<?php echo htmlspecialchars($rt); ?>" <?php echo $filterReturn === $rt ? 'selected' : ''; ?>>
@@ -875,7 +907,7 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
             </div>
             <div>
                 <label>Product Ownership</label>
-                <select name="ownership" style="width:150px;">
+                <select name="ownership" style="width:120px;">
                     <option value="">-- All --</option>
                     <?php foreach ($ownershipList as $ow): ?>
                     <option value="<?php echo htmlspecialchars($ow); ?>" <?php echo $filterOwnership === $ow ? 'selected' : ''; ?>>
@@ -886,7 +918,7 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
             </div>
             <div>
                 <label>Procurement Officer</label>
-                <select name="officer" style="width:160px;">
+                <select name="officer" style="width:130px;">
                     <option value="">-- All Officers --</option>
                     <?php foreach ($officerList as $of): ?>
                     <option value="<?php echo htmlspecialchars($of); ?>" <?php echo $filterOfficer === $of ? 'selected' : ''; ?>>
@@ -897,26 +929,26 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
             </div>
             <div>
                 <label>Confirm Return</label>
-                <select name="confirm" style="width:140px;">
+                <select name="confirm" style="width:110px;">
                     <option value="">-- All --</option>
                     <option value="1" <?php echo $filterConfirm === '1' ? 'selected' : ''; ?>>Confirmed</option>
                     <option value="0" <?php echo $filterConfirm === '0' ? 'selected' : ''; ?>>Not Confirmed</option>
                 </select>
             </div>
-            <div style="flex:1; min-width:180px;">
+            <div style="flex:1; min-width:140px;">
                 <label>Search (Item Code / Description)</label>
                 <input type="text" name="search" value="<?php echo htmlspecialchars($filterSearch); ?>" placeholder="Item code or name..." style="width:100%;">
             </div>
-            <div>
+            <div style="margin-left:auto;"><!-- push Search / Reset / Export to the far right -->
                 <label>&nbsp;</label>
                 <div style="display:flex; gap:6px;">
-                    <button type="submit" class="alpro-btn alpro-btn-blue" style="height:32px; padding:0 16px;">Search</button>
-                    <a href="transferpicklist_warehouse.php" class="alpro-btn alpro-btn-grey" style="height:32px; padding:0 12px; line-height:32px;">Reset</a>
+                    <button type="submit" class="alpro-btn alpro-btn-blue" style="height:32px; padding:0 12px; font-size:13px;">Search</button>
+                    <a href="transferpicklist_warehouse.php" class="alpro-btn alpro-btn-grey" style="height:32px; padding:0 10px; line-height:32px; font-size:13px;">Reset</a>
                     <?php
                     $expParams = $currentParams;
                     $expParams['export'] = '1';
                     ?>
-                    <a href="<?php echo buildWhUrl($expParams); ?>" class="alpro-btn alpro-btn-grey" style="height:32px; padding:0 12px; line-height:32px; color:#1565c0;">&#8595; Export CSV</a>
+                    <a href="<?php echo buildWhUrl($expParams); ?>" class="alpro-btn alpro-btn-grey" style="height:32px; padding:0 10px; line-height:32px; font-size:13px; color:#1565c0;">&#8595; Export CSV</a>
                 </div>
             </div>
         </div>
@@ -947,7 +979,19 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
                 <th>Product Ownership</th>
                 <th>P.Officer</th>
                 <th style="text-align:center;">Reorder Point</th>
-                <th style="text-align:center;">Confirm Return</th>
+                <th style="text-align:center;">
+                    Confirm Return
+                    <?php if (!$isReadOnly && $totalItems > 0 && $filterPicklistId > 0): ?>
+                    <div style="margin-top:4px; font-weight:normal; font-size:11px; white-space:nowrap;">
+                        <label title="Tick / untick Confirm Return for ALL <?php echo number_format($totalItems); ?> item(s) matching the current filter — all pages, not just this one" style="cursor:pointer;">
+                            <input type="checkbox" id="confirm-all-filtered" data-items="<?php echo (int)$totalItems; ?>"
+                                   <?php echo $allFilteredConfirmed ? 'checked' : ''; ?>
+                                   style="width:15px; height:15px; cursor:pointer; vertical-align:middle;">
+                            All (<?php echo number_format($totalItems); ?>)
+                        </label>
+                    </div>
+                    <?php endif; ?>
+                </th>
                 <?php foreach (array('peninsular' => 'Semenanjung', 'sabah' => 'Sabah', 'sarawak' => 'Sarawak') as $thRgn => $thLabel): ?>
                 <th style="text-align:center;">
                     <?php echo $thLabel; ?>
@@ -1098,29 +1142,7 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
     </div>
 
     <!-- Pagination -->
-    <?php if ($totalPages > 1): ?>
-    <div class="pagination">
-        <?php
-        $prevParams = $currentParams; $prevParams['page'] = $page - 1;
-        $nextParams = $currentParams; $nextParams['page'] = $page + 1;
-        ?>
-        <?php if ($page > 1): ?>
-        <a href="<?php echo buildWhUrl($prevParams); ?>">&laquo; Prev</a>
-        <?php endif; ?>
-        <?php for ($p = max(1, $page - 3); $p <= min($totalPages, $page + 3); $p++):
-            $pParams = $currentParams; $pParams['page'] = $p; ?>
-        <?php if ($p === $page): ?>
-        <span class="active"><?php echo $p; ?></span>
-        <?php else: ?>
-        <a href="<?php echo buildWhUrl($pParams); ?>"><?php echo $p; ?></a>
-        <?php endif; ?>
-        <?php endfor; ?>
-        <?php if ($page < $totalPages): ?>
-        <a href="<?php echo buildWhUrl($nextParams); ?>">Next &raquo;</a>
-        <?php endif; ?>
-        <span style="color:#888; border:none;">Page <?php echo $page; ?> of <?php echo $totalPages; ?></span>
-    </div>
-    <?php endif; ?>
+    <?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
 
 </div>
 
@@ -1259,6 +1281,43 @@ document.querySelectorAll('.confirm-chk').forEach(function(chk) {
             });
     });
 });
+
+// (Filters auto-apply via the shared transferpicklist_autofilter.php, loaded by the sidebar.)
+
+// Confirm Return — "All (N)" header checkbox: applies to EVERY item matching the current
+// filter (all pages). Posts with the page's own query string so the server uses the same filter.
+var confirmAllFiltered = document.getElementById('confirm-all-filtered');
+if (confirmAllFiltered) {
+    confirmAllFiltered.addEventListener('change', function() {
+        var box   = this;
+        var state = box.checked ? 1 : 0;
+        var items = parseInt(box.getAttribute('data-items'), 10) || 0;
+        var msg   = (state ? 'CONFIRM return' : 'UNCONFIRM return') + ' for ALL ' + items.toLocaleString() +
+                    ' item(s) matching the current filter?\n\nThis applies to every page, not just the rows shown.';
+        if (!confirm(msg)) { box.checked = !box.checked; return; }
+        box.disabled = true;
+        var fd = new FormData();
+        fd.append('ajax', 'confirm_filtered');
+        fd.append('state', state);
+        fetch('transferpicklist_warehouse.php' + window.location.search, { method: 'POST', body: fd })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                box.disabled = false;
+                if (data.ok) {
+                    alert((state ? 'Confirmed' : 'Unconfirmed') + ' ' + data.items.toLocaleString() + ' item(s).');
+                    location.reload();
+                } else {
+                    box.checked = !box.checked;
+                    alert(data.msg || 'Error updating confirmation.');
+                }
+            })
+            .catch(function() {
+                box.disabled = false;
+                box.checked = !box.checked;
+                alert('Network error');
+            });
+    });
+}
 
 // Checkbox select logic
 var chkAll    = document.getElementById('chk-all');
@@ -1431,7 +1490,7 @@ if (bulkChangeWhBtn) {
 
 <?php
 tplT('Build page HTML');
-if (isset($_GET['debug']) && (int)$transferpicklist_autho >= 1):
+if (isset($_GET['debug']) && (int)$transferpicklist_autho === 1):
     $_tplTotal = microtime(true) - $_tplT0;
 ?>
 <div class="alpro-box" style="margin-top:12px; font-size:12px;">

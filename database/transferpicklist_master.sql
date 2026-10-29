@@ -16,19 +16,43 @@ CREATE TABLE IF NOT EXISTS `transferpicklist_excluded` (
   `item_code` varchar(50) NOT NULL,
   `outlet_code` varchar(50) NOT NULL,
   `note` varchar(200) NOT NULL DEFAULT '',
+  `created_by` varchar(100) DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_pair` (`item_code`,`outlet_code`),
   KEY `idx_item_outlet` (`item_code`,`outlet_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+CREATE TABLE IF NOT EXISTS `transferpicklist_exclusion_log` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `list_type` varchar(20) NOT NULL,
+  `action` varchar(20) NOT NULL,
+  `item_count` int NOT NULL DEFAULT '0',
+  `items` mediumtext,
+  `note` varchar(255) DEFAULT NULL,
+  `by_user` varchar(100) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_list_time` (`list_type`,`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `transferpicklist_excluded_items` (
   `id` int NOT NULL AUTO_INCREMENT,
   `item_code` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `note` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
+  `created_by` varchar(100) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `item_code` (`item_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+CREATE TABLE IF NOT EXISTS `transferpicklist_admin_log` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `staff_id` int NOT NULL,
+  `staff_name` varchar(150) DEFAULT NULL,
+  `action` varchar(10) NOT NULL,
+  `by_user` varchar(100) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS `transferpicklist_item` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `picklist_id` int unsigned NOT NULL,
@@ -42,6 +66,8 @@ CREATE TABLE IF NOT EXISTS `transferpicklist_item` (
   `timestamp` datetime NOT NULL,
   `qty_actual` decimal(10,2) DEFAULT NULL,
   `recycle` tinyint(1) NOT NULL DEFAULT '0',
+  `confirmed_by` varchar(100) DEFAULT NULL,
+  `confirmed_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_from_outlet` (`from_outlet_id`),
   KEY `idx_to_outlet` (`to_outlet_id`),
