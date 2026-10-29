@@ -210,7 +210,42 @@ def save_outlet_rows(conn, outlet_id, rows):
                 chunk = rows[i:i + BATCH_SIZE]
                 saved += cur.executemany(sql, chunk) or 0
     conn.commit()
+    remove_new_from_lists(conn, outlet_id)
     return saved
+
+
+# Lists that must never contain NEW-grade items. The non/slow moving syncs remove
+# NEW items when they save an outlet; doing it here too covers an Item Grade re-sync
+# that happens AFTER those syncs. Because the lists are always kept clean at sync
+# time, the Procurement page no longer re-checks Item Grade on every page load
+# (that per-row check took ~60s on production).
+NEW_GRADE_CLEAN_TABLES = (
+    "transferpicklist_nonmoving",
+    "transferpicklist_nonmoving_ethical",
+    "transferpicklist_slowmoving",
+    "transferpicklist_slowmoving_ethical",
+)
+
+
+def remove_new_from_lists(conn, outlet_id):
+    """Delete this outlet's NEW-grade items from the non/slow moving lists."""
+    for table in NEW_GRADE_CLEAN_TABLES:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    DELETE t FROM {table} t
+                    JOIN transferpicklist_itemgrade ig
+                      ON ig.outlet_id = t.outlet_id AND ig.item_code = t.item_code
+                    WHERE t.outlet_id = %s AND ig.outlet_id = %s
+                      AND UPPER(ig.item_grade) = 'NEW'
+                """, (outlet_id, outlet_id))
+                removed = cur.rowcount
+            conn.commit()
+            if removed:
+                log.info(f"    [NEW] removed {removed} NEW-grade row(s) from {table} for outlet_id {outlet_id}")
+        except Exception as e:
+            conn.rollback()
+            log.warning(f"    [NEW] could not clean {table} for outlet_id {outlet_id}: {e}")
 
 
 def update_status(conn, outlet_id, outlet_code, status, error_msg, timestamp):

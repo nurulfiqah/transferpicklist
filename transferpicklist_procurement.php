@@ -40,27 +40,6 @@ function tplLoadSimple($conn, $inSql, &$item_arr, &$model_arr) {
 function tplTypeFilterSql($col, $filterType) {
     return " AND $col IN (SELECT item_code FROM simple WHERE " . ($filterType === 'non_hq' ? "model = 'Store/HQ Order'" : "model != 'Store/HQ Order'") . ")";
 }
-// transferpicklist_itemgrade.item_code uses a different collation from the
-// nonmoving/slowmoving(_ethical) tables — comparing them directly stops the DB from
-// using the itemgrade (outlet_id, item_code) index, so every NEW-grade check scanned a
-// whole outlet's ~52k itemgrade rows (68s page loads on production). Converting the
-// OUTER side to itemgrade's own charset/collation keeps the index usable. The
-// collation is read from the live table (it differs between local MySQL 8 and
-// production MariaDB), not hardcoded.
-function tplIgCode($col) {
-    static $cs = null;
-    if ($cs === null) {
-        global $conn;
-        $cs = false;
-        $r = $conn->query("SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
-                           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transferpicklist_itemgrade' AND COLUMN_NAME = 'item_code'");
-        if ($r && ($row = $r->fetch_assoc()) && preg_match('/^\w+$/', $row['CHARACTER_SET_NAME'] . $row['COLLATION_NAME'])) {
-            $cs = $row;
-        }
-    }
-    if (!$cs) { return $col; }
-    return "CONVERT($col USING " . $cs['CHARACTER_SET_NAME'] . ") COLLATE " . $cs['COLLATION_NAME'];
-}
 
 // Nonmoving UNION — regular + ethical (same pattern as slowmoving). Defined
 // here (before the export block below) because the nonmoving CSV export
@@ -85,7 +64,7 @@ if (isset($_GET['export'])) {
     if ($listType === 'slowmoving') {
         set_time_limit(300);
 
-        $where = "ig_new.item_code IS NULL";
+        $where = "1=1"; // NEW-grade items are removed at sync time (see $_newExclude note below)
         if ($filterSearch !== '') {
             $esc      = $conn->real_escape_string($filterSearch);
             $searchOr = array("o.code LIKE '%$esc%'", "s.item_code LIKE '%$esc%'");
@@ -124,7 +103,6 @@ if (isset($_GET['export'])) {
                    s.last_month_closing, s.avg_monthly, s.moi, s.adjusted_overstock_qty
             FROM $exportUnion s
             JOIN outlet o ON o.id = s.outlet_id
-            LEFT JOIN transferpicklist_itemgrade ig_new ON ig_new.outlet_id = s.outlet_id AND ig_new.item_code = " . tplIgCode('s.item_code') . " AND UPPER(ig_new.item_grade) = 'NEW'
             WHERE $where
             ORDER BY s.avg_monthly DESC, s.outlet_id, s.item_code
         ");
@@ -153,7 +131,7 @@ if (isset($_GET['export'])) {
         fclose($out);
 
     } else {
-        $where = "ig_new.item_code IS NULL";
+        $where = "1=1"; // NEW-grade items are removed at sync time (see $_newExclude note below)
         if ($filterSearch !== '') {
             $esc      = $conn->real_escape_string($filterSearch);
             $searchOr = array("o.code LIKE '%$esc%'", "n.item_code LIKE '%$esc%'");
@@ -189,7 +167,6 @@ if (isset($_GET['export'])) {
                    n.avg_monthly
             FROM $nmUnion n
             JOIN outlet o ON o.id = n.outlet_id
-            LEFT JOIN transferpicklist_itemgrade ig_new ON ig_new.outlet_id = n.outlet_id AND ig_new.item_code = " . tplIgCode('n.item_code') . " AND UPPER(ig_new.item_grade) = 'NEW'
             WHERE $where
             ORDER BY n.avg_monthly DESC, n.outlet_id, n.item_code
         ");
@@ -217,9 +194,13 @@ $perPage = 50;
 $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset  = ($page - 1) * $perPage;
 
-// NOT EXISTS subquery to exclude NEW-grade items — no memory cost, runs in SQL
-$_newExclude = "NOT EXISTS (SELECT 1 FROM transferpicklist_itemgrade ig WHERE ig.outlet_id = s.outlet_id AND ig.item_code = " . tplIgCode('s.item_code') . " AND UPPER(ig.item_grade) = 'NEW')";
-$_newExcludeNM = "NOT EXISTS (SELECT 1 FROM transferpicklist_itemgrade ig WHERE ig.outlet_id = n.outlet_id AND ig.item_code = " . tplIgCode('n.item_code') . " AND UPPER(ig.item_grade) = 'NEW')";
+// NEW-grade items are NOT re-checked here. They are removed from the non/slow moving
+// tables at sync time — by nonmoving(_ethical)_sync.py / slowmoving(_ethical)_sync.py
+// when they save an outlet, and by itemgrade_sync.py (remove_new_from_lists) when
+// Item Grade is re-synced later. Re-checking every row against ~13M itemgrade rows on
+// each page load took ~60s on production for the same result.
+$_newExclude   = "1=1";
+$_newExcludeNM = "1=1";
 
 // ($nmUnion already defined earlier, above the EXPORT CSV block, so the
 // nonmoving export path can use it too.)
@@ -259,7 +240,7 @@ if ($listType === 'slowmoving') {
     }
 
     $totalItems = (int)$conn->query("SELECT COUNT(*) as cnt FROM $smUnion s JOIN outlet o ON o.id = s.outlet_id WHERE $where")->fetch_assoc()['cnt'];
-    tplT('Slow Moving: count rows (with NEW-grade filter)');
+    tplT('Slow Moving: count rows');
     $totalPages = max(1, ceil($totalItems / $perPage));
 
     $items_res = $conn->query("
@@ -309,7 +290,7 @@ if ($listType === 'slowmoving') {
     }
 
     $totalItems = (int)$conn->query("SELECT COUNT(*) as cnt FROM $nmUnion n JOIN outlet o ON o.id = n.outlet_id WHERE $where")->fetch_assoc()['cnt'];
-    tplT('Non Moving: count rows (with NEW-grade filter)');
+    tplT('Non Moving: count rows');
     $totalPages = max(1, ceil($totalItems / $perPage));
 
     $items_res = $conn->query("
