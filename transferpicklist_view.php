@@ -307,7 +307,10 @@ $stmt->close();
 
     <?php if ($_tpl_is_super_admin): ?>
     <form method="post">
-        <div class="alpro-actions alpro-mt-10" style="display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
+        <style>
+        .tpl-pl-actions .alpro-btn{height:28px !important;padding:0 12px !important;font-size:12px !important;font-weight:600;line-height:28px !important;border-radius:5px !important;box-sizing:border-box;}
+        </style>
+        <div class="alpro-actions alpro-mt-10 tpl-pl-actions" style="display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
             <?php if ($pl['status'] === 'draft'): ?>
                 <input class="alpro-btn alpro-btn-blue" type="submit" name="publish" value="Publish to Outlets">
             <?php elseif ($pl['status'] === 'published'): ?>

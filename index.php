@@ -96,8 +96,13 @@ if ($stmt) {
     </div>
 </div>
 
+<style>
+/* Small eye icon so it doesn't make the rows taller (row padding: see transferpicklist_sidebar.php) */
+table.tpl-dash-table .tpl-view-icon{height:20px !important;width:26px !important;}
+table.tpl-dash-table .tpl-view-icon svg{width:16px;height:16px;}
+</style>
 <fieldset>
-<table class="myTable alpro-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF">
+<table class="myTable alpro-table tpl-dash-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF">
     <tr>
         <th width="30">#</th>
         <th>Pick List No</th>
@@ -157,8 +162,8 @@ if ($stmt) {
             <?php endif; ?>
         </td>
         <td><?php echo htmlspecialchars($pl['timestamp']); ?></td>
-        <td>
-            <a href="transferpicklist_view.php?id=<?php echo (int)$pl['id']; ?>" class="alpro-btn alpro-btn-blue">View</a>
+        <td style="text-align:center;">
+            <a href="transferpicklist_view.php?id=<?php echo (int)$pl['id']; ?>" title="View pick list" class="tpl-view-icon" style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;border-radius:5px;color:#1976d2;text-decoration:none;" onmouseover="this.style.background='#e3f2fd'" onmouseout="this.style.background='transparent'"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></a>
         </td>
     </tr>
     <?php endwhile; ?>

@@ -656,7 +656,7 @@ if ($res) { while ($r = $res->fetch_assoc()) { $activePicklists[] = $r; } }
                 <td style="padding:6px 10px; color:#555;"><?php echo date('d M Y, h:i A', strtotime($ap['timestamp'])); ?></td>
                 <td style="padding:6px 10px; text-align:center; color:#c62828; font-weight:bold;"><?php echo number_format($ap['pending_count']); ?></td>
                 <td style="padding:6px 10px; text-align:center;">
-                    <a href="transferpicklist_view.php?id=<?php echo (int)$ap['id']; ?>" class="alpro-btn alpro-btn-blue" style="font-size:12px; padding:3px 10px;">View</a>
+                    <a href="transferpicklist_view.php?id=<?php echo (int)$ap['id']; ?>" title="View pick list" class="tpl-view-icon" style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;border-radius:5px;color:#1976d2;text-decoration:none;" onmouseover="this.style.background='#e3f2fd'" onmouseout="this.style.background='transparent'"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></a>
                 </td>
             </tr>
             <?php endforeach; ?>

@@ -112,8 +112,8 @@ foreach ($rows as $r) { $totalQty += (float)$r['qty']; }
 <style>
 .tbl-wrap { overflow-x:auto; }
 table.wh-tbl { width:100%; border-collapse:collapse; font-size:12px; }
-table.wh-tbl th { background:#e8ecef; color:#2c3e50; padding:8px 10px; text-align:left; white-space:nowrap; border-bottom:2px solid #cfd8dc; }
-table.wh-tbl td { padding:6px 10px; border-bottom:1px solid #eee; vertical-align:middle; }
+table.wh-tbl th { background:#e8ecef; color:#2c3e50; padding:5px 8px; text-align:left; white-space:nowrap; border-bottom:2px solid #cfd8dc; }
+table.wh-tbl td { padding:2px 8px; line-height:1.25; border-bottom:1px solid #eee; vertical-align:middle; }
 table.wh-tbl tr:hover td { background:#f5f8ff; }
 .badge-hq  { background:#1565c0; color:#fff; border-radius:3px; padding:2px 6px; font-size:11px; font-weight:bold; }
 .badge-nhq { background:#546e7a; color:#fff; border-radius:3px; padding:2px 6px; font-size:11px; font-weight:bold; }

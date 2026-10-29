@@ -44,6 +44,10 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
     /* Smaller gap under the blue page header (page.css gives it 18px) — this module only */
     body .header { margin-bottom: 8px !important; }
 
+    /* Compact table rows on every page (myTable = most lists, wh-tbl = Warehouse Returns) */
+    body table.myTable td, body table.wh-tbl td { padding: 2px 8px !important; line-height: 1.25 !important; }
+    body table.myTable th, body table.wh-tbl th { padding: 5px 8px !important; }
+
     /* Compact filter bars — one rule for every page's filter section
        (each page keeps its own layout; this only shrinks spacing, fields and buttons) */
     body .prc-filter-bar, body .tpl-filter-bar, body .detail-filter, body .filter-bar,

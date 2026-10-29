@@ -129,6 +129,16 @@ $totalPages      = 1;
 $page            = 1;
 $offset          = 0;
 $pendingAllCount = 0;
+$confirmLog      = array();
+
+// Confirm per outlet only: with more than one outlet in view (manager's "All My Outlets",
+// Super Admin's "All Outlets") the confirm actions are blocked until one outlet is chosen.
+$_multiOutlet = count($myOutletIds) > 1;
+if ($_multiOutlet && (isset($_POST['confirm_all']) || isset($_POST['bulk_confirm']) || isset($_POST['mark_transferred']))) {
+    unset($_POST['confirm_all'], $_POST['bulk_confirm'], $_POST['mark_transferred']);
+    $msg      = 'Please choose <b>one outlet</b> in the Outlet filter before confirming — items are confirmed per outlet.';
+    $msg_type = 'error';
+}
 
 if (!empty($myOutletIds)) {
     $inIds = implode(',', $myOutletIds);
@@ -459,6 +469,17 @@ if (!empty($myOutletIds)) {
         // Count all pending items across all pages (for Confirm All button)
         $pendingAllRes = $conn->query("SELECT COUNT(*) as cnt FROM transferpicklist_item i JOIN transferpicklist_picklist p ON p.id=i.picklist_id AND p.status='published' WHERE $whereStr AND i.status='pending'");
         $pendingAllCount = $pendingAllRes ? (int)$pendingAllRes->fetch_assoc()['cnt'] : 0;
+
+        // Who confirmed and when — grouped per confirm action, shown once on the last page
+        $clRes = $conn->query("
+            SELECT i.confirmed_by, MAX(i.confirmed_at) AS at, COUNT(*) AS n
+            FROM transferpicklist_item i
+            JOIN transferpicklist_picklist p ON p.id = i.picklist_id AND p.status = 'published'
+            WHERE $whereStr AND i.status = 'transferred' AND i.confirmed_at IS NOT NULL
+            GROUP BY i.confirmed_by, DATE_FORMAT(i.confirmed_at, '%Y-%m-%d %H:%i')
+            ORDER BY at DESC LIMIT 10
+        ");
+        while ($clRes && $cl = $clRes->fetch_assoc()) { $confirmLog[] = $cl; }
 
         // EXPORT CSV
         if (isset($_GET['export'])) {
@@ -833,9 +854,6 @@ if (!empty($myOutletIds)) {
                 <span style="color:#f57c00;">Pending</span>
             <?php elseif ($item['status'] === 'transferred'): ?>
                 <span style="color:#388e3c;">Confirmed</span>
-                <?php if (!empty($item['confirmed_at'])): ?>
-                <div style="font-size:11px; color:#888; white-space:nowrap;"><?php echo date('d M Y, h:i A', strtotime($item['confirmed_at'])); ?><?php if (!empty($item['confirmed_by'])): ?><br>by <?php echo htmlspecialchars($item['confirmed_by']); ?><?php endif; ?></div>
-                <?php endif; ?>
             <?php else: ?>
                 <span style="color:#c62828;">Rejected</span>
                 <?php if (isset($reassignMap[(int)$item['id']])): ?>
@@ -867,7 +885,14 @@ $pgBase = 'transferpicklist_outlet.php?view=outgoing'
 
 </form>
 
-<?php if ($pendingAllCount > 0 && $page == $totalPages):
+<?php if ($pendingAllCount > 0 && $page == $totalPages && $_multiOutlet): ?>
+<div class="tpl-confirm-bar" style="margin-top:10px; display:flex; justify-content:flex-end;">
+    <span style="font-size:12px; color:#8d6e00; background:#fff8e1; border:1px solid #ffe082; border-radius:6px; padding:6px 12px;">
+        &#9888; <?php echo number_format($pendingAllCount); ?> pending — choose <b>one outlet</b> in the Outlet filter above to confirm. Items are confirmed per outlet.
+    </span>
+</div>
+<?php endif; ?>
+<?php if ($pendingAllCount > 0 && $page == $totalPages && !$_multiOutlet):
     // Build modal detail values
     $modalPlNo   = $filterPicklist !== '' ? $filterPicklist : 'All Pick Lists';
     $modalPlDate = '';
@@ -975,6 +1000,18 @@ $pgBase = 'transferpicklist_outlet.php?view=outgoing'
 </div>
 <?php endif; ?>
 
+<?php if (!empty($confirmLog) && $page == $totalPages): ?>
+<div style="margin-top:10px; display:flex; flex-direction:column; align-items:flex-end; gap:3px; font-size:12px; color:#555;">
+    <?php foreach ($confirmLog as $cl): ?>
+    <div style="border-right:3px solid #2e7d32; padding:2px 10px 2px 0; text-align:right;">
+        <span style="color:#2e7d32; font-weight:600;">&#10003; <?php echo number_format((int)$cl['n']); ?> item<?php echo (int)$cl['n'] === 1 ? '' : 's'; ?> confirmed</span>
+        by <b><?php echo htmlspecialchars($cl['confirmed_by'] !== null && $cl['confirmed_by'] !== '' ? $cl['confirmed_by'] : 'Unknown'); ?></b>
+        &middot; <?php echo date('d M Y, h:i A', strtotime($cl['at'])); ?>
+    </div>
+    <?php endforeach; ?>
+</div>
+<?php endif; ?>
+
 <?php else: ?>
 <fieldset>
 <table class="myTable alpro-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF">
@@ -1024,9 +1061,6 @@ $pgBase = 'transferpicklist_outlet.php?view=outgoing'
                 <span style="color:#f57c00;">Pending</span>
             <?php elseif ($item['status'] === 'transferred'): ?>
                 <span style="color:#388e3c;">Confirmed</span>
-                <?php if (!empty($item['confirmed_at'])): ?>
-                <div style="font-size:11px; color:#888; white-space:nowrap;"><?php echo date('d M Y, h:i A', strtotime($item['confirmed_at'])); ?><?php if (!empty($item['confirmed_by'])): ?><br>by <?php echo htmlspecialchars($item['confirmed_by']); ?><?php endif; ?></div>
-                <?php endif; ?>
             <?php else: ?>
                 <span style="color:#c62828;">Cancelled</span>
             <?php endif; ?>
