@@ -222,8 +222,12 @@ function syncInfoPythonScheduled($isSuper, $scriptName, $syncPage, $pendingCount
 .badge-err { background:#ffebee; color:#c62828; font-size:10px; font-weight:bold; padding:1px 5px; border-radius:3px; white-space:nowrap; }
 .badge-na  { background:#f5f5f5; color:#aaa;    font-size:10px; padding:1px 5px; border-radius:3px; white-space:nowrap; }
 .sync-actions { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
-.tpl-filter-bar { display:flex; align-items:flex-end; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+.tpl-filter-bar { background:#fff; border:1px solid #ddd; border-radius:6px; padding:12px 16px; display:flex; align-items:flex-end; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+.tpl-filter-label { display:block; font-size:11px; color:#888; margin-bottom:4px; text-align:center; }
+.tpl-filter-bar input[type=text], .tpl-filter-bar select { width:100%; padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px; box-sizing:border-box; height:32px; }
+.tpl-filter-bar input[type=text]:focus, .tpl-filter-bar select:focus { border-color:#1976d2; outline:none; }
 .tpl-filter-grow { flex:1 1 0; min-width:120px; }
+.tpl-filter-fixed { flex:0 0 auto; white-space:nowrap; }
 /* IG Sync All uses POST form */
 .ig-sync-form { display:inline; }
 </style>
@@ -339,21 +343,20 @@ function syncInfoPythonScheduled($isSuper, $scriptName, $syncPage, $pendingCount
     <form method="get" action="">
     <div class="tpl-filter-bar">
         <div class="tpl-filter-grow">
-            <label style="font-size:11px;color:#888;">Search Outlet</label>
-            <input type="text" name="q" value="<?php echo htmlspecialchars($filterSearch); ?>"
-                   placeholder="Outlet code..." class="alpro-input" style="width:100%;">
+            <span class="tpl-filter-label">Search Outlet</span>
+            <input type="text" name="q" value="<?php echo htmlspecialchars($filterSearch); ?>" placeholder="Outlet code...">
         </div>
-        <div style="flex:0 0 auto;">
-            <label style="font-size:11px;color:#888;">Show</label>
-            <select name="filter" class="alpro-select" style="width:140px;">
+        <div style="flex:0 0 180px;">
+            <span class="tpl-filter-label">Show</span>
+            <select name="filter">
                 <option value="all"     <?php echo $filterStatus === 'all'     ? 'selected' : ''; ?>>All Outlets</option>
                 <option value="pending" <?php echo $filterStatus === 'pending' ? 'selected' : ''; ?>>Pending / Failed</option>
                 <option value="synced"  <?php echo $filterStatus === 'synced'  ? 'selected' : ''; ?>>Fully Synced</option>
             </select>
         </div>
-        <div style="flex:0 0 auto; padding-bottom:1px;">
-            <button type="submit" class="alpro-btn alpro-btn-blue">Filter</button>
-            <a href="transferpicklist_sync_status.php" class="alpro-btn alpro-btn-grey">Reset</a>
+        <div class="tpl-filter-fixed" style="display:flex; gap:6px;">
+            <button type="submit" class="alpro-btn alpro-btn-blue">Search</button>
+            <a href="transferpicklist_sync_status.php" class="alpro-btn alpro-btn-grey" style="display:inline-flex; align-items:center;">Clear</a>
         </div>
     </div>
     </form>

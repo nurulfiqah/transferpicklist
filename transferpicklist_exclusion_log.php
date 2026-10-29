@@ -52,7 +52,7 @@ function tplExLogRender($conn, $listType, $limit = 50) {
         if ($r['action'] === 'insert')         { $title = "Added $n $plur to the exclusion list";         $color = '#2e7d32'; }
         elseif ($r['action'] === 'delete')     { $title = "Removed $n $plur from the exclusion list";     $color = '#c62828'; }
         else                                   { $title = "Cleared ALL exclusions ($n $plur removed)";     $color = '#c62828'; }
-        echo '<div style="border-left:3px solid ' . $color . '; padding:4px 0 4px 12px; margin-bottom:10px;">';
+        echo '<div style="border-left:3px solid ' . $color . '; padding:4px 0 4px 12px; margin-bottom:10px; text-align:left;">';
         echo '<div style="font-size:14px; color:#222;">' . htmlspecialchars($title) . '</div>';
         if ($list !== '') {
             $codes = explode(', ', $list);

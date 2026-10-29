@@ -41,9 +41,41 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
         display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; border-radius: 6px;
     }
     .tpl-nav-title { margin-right: 10px; color: #2c3e50; font-size: 15px; }
+    /* Smaller gap under the blue page header (page.css gives it 18px) — this module only */
+    body .header { margin-bottom: 8px !important; }
+
+    /* Compact filter bars — one rule for every page's filter section
+       (each page keeps its own layout; this only shrinks spacing, fields and buttons) */
+    body .prc-filter-bar, body .tpl-filter-bar, body .detail-filter, body .filter-bar,
+    body .arc-filter-bar, body .oex-filter-bar, body .tpl-adm-search {
+        padding: 8px 12px !important; margin-bottom: 10px !important; gap: 6px !important;
+    }
+    body .prc-filter-label, body .tpl-filter-label, body .detail-filter-label, body .filter-bar label,
+    body .arc-filter-label, body .oex-filter-label, body .tpl-adm-search label {
+        font-size: 10.5px !important; margin-bottom: 2px !important;
+    }
+    body .prc-filter-bar input[type=text], body .prc-filter-bar select,
+    body .tpl-filter-bar input[type=text], body .tpl-filter-bar select,
+    body .detail-filter input[type=text],  body .detail-filter select,
+    body .filter-bar input[type=text],     body .filter-bar select,
+    body .arc-filter-bar input[type=text], body .arc-filter-bar select,
+    body .oex-filter-bar input[type=text], body .oex-filter-bar select,
+    body .tpl-adm-search input[type=text], body .tpl-adm-search select {
+        height: 28px !important; padding: 2px 8px !important; font-size: 12px !important;
+    }
+    body .prc-filter-bar .alpro-btn, body .prc-filter-bar input[type=submit], body .prc-filter-bar button,
+    body .tpl-filter-bar .alpro-btn, body .tpl-filter-bar input[type=submit], body .tpl-filter-bar button,
+    body .detail-filter .alpro-btn,  body .detail-filter input[type=submit],  body .detail-filter button,
+    body .filter-bar .alpro-btn,     body .filter-bar input[type=submit],     body .filter-bar button,
+    body .arc-filter-bar .alpro-btn, body .arc-filter-bar input[type=submit], body .arc-filter-bar button,
+    body .oex-filter-bar .alpro-btn, body .oex-filter-bar input[type=submit], body .oex-filter-bar button,
+    body .tpl-adm-search .alpro-btn, body .tpl-adm-search input[type=submit] {
+        height: 28px !important; padding: 0 12px !important; font-size: 12px !important;
+        line-height: 28px !important; box-sizing: border-box !important; border-radius: 5px !important;
+    }
 </style>
 
-<div class="alpro-box" style="margin-bottom:20px; background:#fff; overflow:visible;">
+<div class="alpro-box" style="margin-bottom:10px; background:#fff; overflow:visible;">
     <div class="alpro-actions tpl-nav" style="margin-bottom:0; display:flex; align-items:center; flex-wrap:wrap; gap:5px; overflow:visible;">
 
         <strong class="tpl-nav-title">Transfer Pick List</strong>

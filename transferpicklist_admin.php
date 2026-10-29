@@ -170,8 +170,7 @@ function tplAdminBtn($sid, $grant, $name, $token, $keepQs, $disabledReason = '')
 
 <!-- CURRENT SUPER ADMINS -->
 <div class="alpro-box">
-    <div class="tpl-adm-title">&#128273; Super Admins <span class="tpl-adm-badge"><?php echo count($admins); ?></span>
-        <small>— full access to every Transfer Pick List page</small></div>
+    <div class="tpl-adm-title">&#128273; Super Admins <span class="tpl-adm-badge"><?php echo count($admins); ?></span></div>
     <table class="myTable alpro-table" width="100%" cellpadding="6" cellspacing="1" bgcolor="#EFEFEF">
         <tr><th width="40">No.</th><th>Name</th><th>Department</th><th>Position</th><th width="160">Action</th></tr>
         <?php if (empty($admins)): ?>
@@ -241,7 +240,7 @@ function tplAdminBtn($sid, $grant, $name, $token, $keepQs, $disabledReason = '')
     <div class="alpro-muted" style="font-size:13px;">No changes recorded yet.</div>
     <?php endif; ?>
     <?php foreach ($logs as $l): $g = $l['action'] === 'grant'; ?>
-    <div style="border-left:3px solid <?php echo $g ? '#2e7d32' : '#c62828'; ?>; padding:3px 0 3px 12px; margin-bottom:8px;">
+    <div style="border-left:3px solid <?php echo $g ? '#2e7d32' : '#c62828'; ?>; padding:3px 0 3px 12px; margin-bottom:8px; text-align:left;">
         <div style="font-size:13px;"><b><?php echo htmlspecialchars($l['staff_name']); ?></b> <?php echo $g ? 'was made a Super Admin' : 'was removed as Super Admin'; ?></div>
         <div style="font-size:11px;color:#888;">by <?php echo htmlspecialchars($l['by_user'] !== '' && $l['by_user'] !== null ? $l['by_user'] : 'Unknown'); ?> &middot; <?php echo date('d M Y, h:i A', strtotime($l['created_at'])); ?></div>
     </div>

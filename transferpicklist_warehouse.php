@@ -960,12 +960,6 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
     </div>
     <?php endif; ?>
 
-    <?php if ($totalItems > 0): ?>
-    <div style="margin-bottom:8px; font-size:13px; color:#555;">
-        Showing <b><?php echo number_format($offset + 1); ?></b>–<b><?php echo number_format(min($offset + $perPage, $totalItems)); ?></b> of <b><?php echo number_format($totalItems); ?></b> records
-    </div>
-    <?php endif; ?>
-
     <div class="tbl-wrap">
     <table class="wh-tbl">
         <thead>
