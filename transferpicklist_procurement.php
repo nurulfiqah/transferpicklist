@@ -1,4 +1,7 @@
 <?php
+// ── Timing debug: add &debug=1 to the URL (admins only) to see how long each step takes ──
+$_tplT0 = microtime(true); $_tplTimes = array(); $_tplLast = $_tplT0;
+function tplT($label) { global $_tplTimes, $_tplLast; $now = microtime(true); $_tplTimes[] = array($label, $now - $_tplLast); $_tplLast = $now; }
 require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
@@ -11,6 +14,7 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 // legacy return-false-on-error behavior so a query problem shows up as a
 // normal page issue instead of an uncaught fatal error crashing the export.
 mysqli_report(MYSQLI_REPORT_OFF);
+tplT('Login check + database connect (outer app)');
 $_tpl_proc_access = ((int)$transferpicklist_autho >= 1) || ((int)$department === 18);
 if (!$_tpl_proc_access) { redirect('/odb/permission.php'); }
 
@@ -241,6 +245,7 @@ if ($listType === 'slowmoving') {
     }
 
     $totalItems = (int)$conn->query("SELECT COUNT(*) as cnt FROM $smUnion s JOIN outlet o ON o.id = s.outlet_id WHERE $where")->fetch_assoc()['cnt'];
+    tplT('Slow Moving: count rows (with NEW-grade filter)');
     $totalPages = max(1, ceil($totalItems / $perPage));
 
     $items_res = $conn->query("
@@ -255,12 +260,15 @@ if ($listType === 'slowmoving') {
     $pageRows = array();
     $_codes   = array();
     while ($r = $items_res->fetch_assoc()) { $pageRows[] = $r; $_codes[$r['item_code']] = true; }
+    tplT('Slow Moving: load 50 rows');
     $p3m_arr  = array();
 
     $statsRes = $conn->query("SELECT COUNT(DISTINCT outlet_id) as total_outlets, COUNT(*) as total_items, COUNT(DISTINCT item_code) as unique_items FROM $smUnion s");
     $stats    = $statsRes->fetch_assoc();
+    tplT('Stats box (outlets / items / unique)');
     $syncRes  = $conn->query("SELECT GREATEST(COALESCE((SELECT MAX(last_sync) FROM transferpicklist_slowmoving_status WHERE status=1), '1970-01-01'), COALESCE((SELECT MAX(last_sync) FROM transferpicklist_slowmoving_ethical_status WHERE status=1), '1970-01-01')) as latest");
     $syncDate = ($r = $syncRes->fetch_assoc()) ? $r['latest'] : '';
+    tplT('Last sync date');
 
 } else {
 
@@ -287,6 +295,7 @@ if ($listType === 'slowmoving') {
     }
 
     $totalItems = (int)$conn->query("SELECT COUNT(*) as cnt FROM $nmUnion n JOIN outlet o ON o.id = n.outlet_id WHERE $where")->fetch_assoc()['cnt'];
+    tplT('Non Moving: count rows (with NEW-grade filter)');
     $totalPages = max(1, ceil($totalItems / $perPage));
 
     $items_res = $conn->query("
@@ -303,18 +312,22 @@ if ($listType === 'slowmoving') {
         $pageRows[] = $r;
         $_codes[$r['item_code']] = true;
     }
+    tplT('Non Moving: load 50 rows');
     $p3m_arr = array();
 
     $statsRes = $conn->query("SELECT COUNT(DISTINCT outlet_id) as total_outlets, COUNT(*) as total_items, COUNT(DISTINCT item_code) as unique_items FROM $nmUnion n");
     $stats    = $statsRes->fetch_assoc();
+    tplT('Stats box (outlets / items / unique)');
     $syncRes  = $conn->query("SELECT GREATEST(COALESCE((SELECT MAX(last_sync) FROM transferpicklist_nonmoving_status WHERE status=1), '1970-01-01'), COALESCE((SELECT MAX(last_sync) FROM transferpicklist_nonmoving_ethical_status WHERE status=1), '1970-01-01')) as latest");
     $syncDate = ($r = $syncRes->fetch_assoc()) ? $r['latest'] : '';
+    tplT('Last sync date');
 }
 
 // Item descriptions + models for the rows on THIS page only (max $perPage codes)
 if (!empty($_codes)) {
     tplLoadSimple($conn, implode(',', array_map(function($c) use ($conn) { return "'" . $conn->real_escape_string($c) . "'"; }, array_keys($_codes))), $item_arr, $model_arr);
 }
+tplT('Item names for the 50 rows');
 
 $pgBase = $baseUrl
     . ($filterSearch   !== '' ? '&search='   . urlencode($filterSearch)   : '')
@@ -387,6 +400,7 @@ if ($listType === 'slowmoving') {
 }
 $_outletList  = array();
 while ($_or = $_outletRes->fetch_assoc()) { $_outletList[] = $_or['code']; }
+tplT('Outlet dropdown list');
 ?>
 <style>
 .prc-filter-bar{background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:flex-end;gap:8px;}
@@ -599,6 +613,25 @@ while ($_or = $_outletRes->fetch_assoc()) { $_outletList[] = $_or['code']; }
 </div>
 <?php endif; ?>
 
+<?php
+tplT('Build page HTML');
+if (isset($_GET['debug']) && (int)$transferpicklist_autho >= 1):
+    $_tplTotal = microtime(true) - $_tplT0;
+?>
+<div class="alpro-box" style="margin-top:12px; font-size:12px;">
+    <b>Timing debug</b> — total <b><?php echo number_format($_tplTotal, 2); ?>s</b> (server side)
+    <table class="myTable alpro-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF" style="margin-top:6px;">
+        <tr><th style="text-align:left;">Step</th><th class="alpro-center" width="110">Seconds</th><th class="alpro-center" width="90">% of total</th></tr>
+        <?php foreach ($_tplTimes as $_tt): ?>
+        <tr<?php echo $_tt[1] >= 1 ? ' style="background:#fff3e0;"' : ''; ?>>
+            <td><?php echo htmlspecialchars($_tt[0]); ?></td>
+            <td class="alpro-center"><b><?php echo number_format($_tt[1], 3); ?></b></td>
+            <td class="alpro-center"><?php echo $_tplTotal > 0 ? round($_tt[1] / $_tplTotal * 100) : 0; ?>%</td>
+        </tr>
+        <?php endforeach; ?>
+    </table>
+</div>
+<?php endif; ?>
 <?php
 $connect = 0;
 include('../common/index_adv.php');
