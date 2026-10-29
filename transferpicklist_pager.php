@@ -1,6 +1,6 @@
 <?php
 // Shared list footer for every paged Transfer Pick List page (DataTables-style):
-//   left:  Show [15|25|50|100] entries
+//   left:  Show [50|100|150|200] entries
 //   right: Showing X to Y of Z entries   Previous  1 … 4 5 6 … 99  Next
 // Links keep every current GET filter and only change ?page= / ?per_page=.
 if (defined('TPL_PAGER_LOADED')) { return; }
@@ -8,7 +8,7 @@ define('TPL_PAGER_LOADED', true);
 
 // Rows per page from ?per_page= (allowed values only), else the page's default.
 function tplPerPage($default = 50) {
-    $allowed = array(15, 25, 50, 100);
+    $allowed = array(50, 100, 150, 200);
     $v = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 0;
     return in_array($v, $allowed, true) ? $v : $default;
 }
@@ -52,7 +52,7 @@ function tplPager($page, $totalPages, $totalItems, $perPage, $estimate = false) 
 
     // Left: Show [n] entries
     echo '<div>Show<select onchange="window.location.href=this.value">';
-    foreach (array(15, 25, 50, 100) as $n) {
+    foreach (array(50, 100, 150, 200) as $n) {
         $url = tplPagerUrl(array('per_page' => $n, 'page' => null));
         echo '<option value="' . htmlspecialchars($url) . '"' . ($n === (int)$perPage ? ' selected' : '') . '>' . $n . '</option>';
     }
