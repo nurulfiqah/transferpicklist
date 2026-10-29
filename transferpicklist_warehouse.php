@@ -1,4 +1,7 @@
 <?php
+// ── Timing debug: add &debug=1 to the URL (admins only) to see how long each step takes ──
+$_tplT0 = microtime(true); $_tplTimes = array(); $_tplLast = $_tplT0;
+function tplT($label) { global $_tplTimes, $_tplLast; $now = microtime(true); $_tplTimes[] = array($label, $now - $_tplLast); $_tplLast = $now; }
 ini_set('memory_limit', '256M');
 ini_set('max_execution_time', 120);
 require_once('../lock_adv.php');
@@ -12,6 +15,7 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 // handlers expect the legacy return-false-on-error behavior (they check
 // $conn->error / affected_rows rather than using try/catch), so restore it.
 mysqli_report(MYSQLI_REPORT_OFF);
+tplT('Login check + database connect (outer app)');
 // Raise MySQL's default 1024-byte GROUP_CONCAT limit — the checkbox value
 // (all row IDs behind one item_code) can easily exceed that for high-volume
 // items, silently truncating which rows get selected for bulk actions.
@@ -461,6 +465,7 @@ $_plRes = $conn->query("
     ORDER BY p.timestamp DESC
 ");
 if ($_plRes) { while ($r = $_plRes->fetch_assoc()) { $picklistOptions[] = $r; } }
+tplT('Pick list dropdown (all warehouse pick lists)');
 
 if ($filterPicklist === '' && !empty($picklistOptions)) {
     $filterPicklist = $picklistOptions[0]['picklist_no'];
@@ -500,6 +505,7 @@ if ($filterPicklistId > 0) {
         }
     }
 }
+tplT('Current warehouse per region');
 
 $perPage = 50;
 $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
@@ -515,12 +521,14 @@ if ($filterPicklistId > 0) {
 }
 $_icCodes = array();
 if ($_icRes) { while ($r = $_icRes->fetch_assoc()) { $_icCodes[] = "'" . $conn->real_escape_string($r['item_code']) . "'"; } }
+tplT('Item codes in this pick list');
 
 // Step 2: get distinct procurement_officer from simple using those item_codes (no JOIN)
 if (!empty($_icCodes)) {
     $offRes = $conn->query("SELECT DISTINCT procurement_officer FROM simple WHERE item_code IN (" . implode(',', $_icCodes) . ") AND procurement_officer != '' AND procurement_officer IS NOT NULL ORDER BY procurement_officer");
     if ($offRes) { while ($r = $offRes->fetch_assoc()) { if ($r['procurement_officer'] !== '') { $officerList[] = $r['procurement_officer']; } } }
 }
+tplT('P.Officer dropdown (item master lookup)');
 
 // Step 3: get staff names using username column (same logic as original)
 if (!empty($officerList)) {
@@ -536,6 +544,7 @@ if (!empty($officerList)) {
         }
     }
 }
+tplT('Staff names (whole staff table)');
 
 // Model / Return / Ownership option lists (from simple, scoped to current picklist's items)
 $modelList     = array();
@@ -550,6 +559,7 @@ if (!empty($_icCodes)) {
     $owRes = $conn->query("SELECT DISTINCT product_ownership FROM simple WHERE item_code IN ($_icIn) AND product_ownership != '' AND product_ownership IS NOT NULL ORDER BY product_ownership");
     if ($owRes) { while ($r = $owRes->fetch_assoc()) { if ($r['product_ownership'] !== '') { $ownershipList[] = $r['product_ownership']; } } }
 }
+tplT('Model / Return / Ownership dropdowns (3 item master lookups)');
 
 // Outlet dropdown — direct picklist_id filter, no JOIN to picklist table
 $outletList = array();
@@ -571,6 +581,7 @@ if ($filterPicklistId > 0) {
     ");
 }
 if ($olRes) { while ($r = $olRes->fetch_assoc()) { $outletList[] = $r['code']; } }
+tplT('Outlet dropdown');
 
 // Build WHERE — use picklist_id directly when available (avoids JOIN to picklist table)
 $whereClauses     = array("i.priority_type = 'warehouse'", "i.recycle = 0");
@@ -629,6 +640,7 @@ if ($filterOwnership !== '') {
 if ($filterConfirm !== '') { $whereClauses[] = "i.return_confirmed = " . ($filterConfirm === '1' ? '1' : '0'); }
 $whereStr = implode(' AND ', $whereClauses);
 $_plJoin  = $needPicklistJoin ? "JOIN transferpicklist_picklist p ON p.id = i.picklist_id" : "";
+tplT('Apply filters');
 
 // Export CSV — joins simple directly, no preload needed
 if (isset($_GET['export'])) {
@@ -676,6 +688,7 @@ $cntRes = $conn->query("
 ");
 if ($cntRes) { $totalItems = (int)$cntRes->fetch_assoc()['cnt']; }
 $totalPages = max(1, ceil($totalItems / $perPage));
+tplT('Count items');
 
 // Stats
 $pendingCount     = 0;
@@ -695,6 +708,7 @@ if ($stRes) {
         if ($r['status'] === 'transferred') { $transferredCount = (int)$r['cnt']; }
     }
 }
+tplT('Stats (pending / transferred)');
 
 $rows = array();
 $res = $conn->query("
@@ -721,6 +735,7 @@ if ($res) {
         $rows[] = $r;
     }
 }
+tplT('Load 50 rows (grouped by item)');
 
 // Load simple details for only the current page's item codes (max 200)
 $outlet_arr = array();
@@ -731,6 +746,7 @@ if (!empty($pageItemCodes)) {
     ");
     if ($saRes) { while ($r = $saRes->fetch_assoc()) { $outlet_arr[$r['item_code']] = $r; } }
 }
+tplT('Item details for the 50 rows');
 
 // Enrich rows with simple details
 foreach ($rows as &$r) {
@@ -1413,6 +1429,25 @@ if (bulkChangeWhBtn) {
 }
 </script>
 
+<?php
+tplT('Build page HTML');
+if (isset($_GET['debug']) && (int)$transferpicklist_autho >= 1):
+    $_tplTotal = microtime(true) - $_tplT0;
+?>
+<div class="alpro-box" style="margin-top:12px; font-size:12px;">
+    <b>Timing debug</b> — total <b><?php echo number_format($_tplTotal, 2); ?>s</b> (server side)
+    <table class="myTable alpro-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF" style="margin-top:6px;">
+        <tr><th style="text-align:left;">Step</th><th class="alpro-center" width="110">Seconds</th><th class="alpro-center" width="90">% of total</th></tr>
+        <?php foreach ($_tplTimes as $_tt): ?>
+        <tr<?php echo $_tt[1] >= 1 ? ' style="background:#fff3e0;"' : ''; ?>>
+            <td><?php echo htmlspecialchars($_tt[0]); ?></td>
+            <td class="alpro-center"><b><?php echo number_format($_tt[1], 3); ?></b></td>
+            <td class="alpro-center"><?php echo $_tplTotal > 0 ? round($_tt[1] / $_tplTotal * 100) : 0; ?>%</td>
+        </tr>
+        <?php endforeach; ?>
+    </table>
+</div>
+<?php endif; ?>
 <?php
 $connect = 0;
 include('../common/index_adv.php');
