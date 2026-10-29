@@ -40,12 +40,26 @@ function tplLoadSimple($conn, $inSql, &$item_arr, &$model_arr) {
 function tplTypeFilterSql($col, $filterType) {
     return " AND $col IN (SELECT item_code FROM simple WHERE " . ($filterType === 'non_hq' ? "model = 'Store/HQ Order'" : "model != 'Store/HQ Order'") . ")";
 }
-// itemgrade.item_code is utf8mb4_bin while the nonmoving/slowmoving(_ethical)
-// tables use other collations — comparing them directly stops MySQL from using
-// the itemgrade (outlet_id, item_code) index, so every NEW-grade check scanned a
-// whole outlet's ~52k itemgrade rows. Converting the OUTER side keeps the index usable.
+// transferpicklist_itemgrade.item_code uses a different collation from the
+// nonmoving/slowmoving(_ethical) tables — comparing them directly stops the DB from
+// using the itemgrade (outlet_id, item_code) index, so every NEW-grade check scanned a
+// whole outlet's ~52k itemgrade rows (68s page loads on production). Converting the
+// OUTER side to itemgrade's own charset/collation keeps the index usable. The
+// collation is read from the live table (it differs between local MySQL 8 and
+// production MariaDB), not hardcoded.
 function tplIgCode($col) {
-    return "CONVERT($col USING utf8mb4) COLLATE utf8mb4_bin";
+    static $cs = null;
+    if ($cs === null) {
+        global $conn;
+        $cs = false;
+        $r = $conn->query("SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+                           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transferpicklist_itemgrade' AND COLUMN_NAME = 'item_code'");
+        if ($r && ($row = $r->fetch_assoc()) && preg_match('/^\w+$/', $row['CHARACTER_SET_NAME'] . $row['COLLATION_NAME'])) {
+            $cs = $row;
+        }
+    }
+    if (!$cs) { return $col; }
+    return "CONVERT($col USING " . $cs['CHARACTER_SET_NAME'] . ") COLLATE " . $cs['COLLATION_NAME'];
 }
 
 // Nonmoving UNION — regular + ethical (same pattern as slowmoving). Defined
