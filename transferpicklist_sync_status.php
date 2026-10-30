@@ -120,22 +120,23 @@ $sql = "
 ";
 $res = mysqli_query($conn, $sql);
 
-// ── QUERY 2: Summary card counts — one query for all 4 tables ─────────
-$sumQ = mysqli_query($conn, "
-    SELECT
-        'ig'  AS src, COUNT(*) AS total, SUM(status=1) AS synced, SUM(status=0) AS pending, MAX(last_sync) AS last_sync
-        FROM transferpicklist_itemgrade_status
+// ── QUERY 2: Summary card counts — one query for all 6 status tables ─────────
+// Only ACTIVE outlets (outlet.recycle = 0), exactly like the per-outlet table below —
+// otherwise an inactive outlet left "pending" shows in the card but never in the list.
+$_sumPart = function ($src, $tbl) {
+    return "SELECT '$src' AS src, COUNT(*) AS total, SUM(t.status=1) AS synced, SUM(t.status=0) AS pending, MAX(t.last_sync) AS last_sync
+            FROM $tbl t JOIN outlet o ON o.code = t.outlet_code AND o.recycle = 0";
+};
+$sumQ = mysqli_query($conn, implode("
     UNION ALL
-    SELECT 'nm',  COUNT(*), SUM(status=1), SUM(status=0), MAX(last_sync) FROM transferpicklist_nonmoving_status
-    UNION ALL
-    SELECT 'nme', COUNT(*), SUM(status=1), SUM(status=0), MAX(last_sync) FROM transferpicklist_nonmoving_ethical_status
-    UNION ALL
-    SELECT 'sm',  COUNT(*), SUM(status=1), SUM(status=0), MAX(last_sync) FROM transferpicklist_slowmoving_status
-    UNION ALL
-    SELECT 'sme', COUNT(*), SUM(status=1), SUM(status=0), MAX(last_sync) FROM transferpicklist_slowmoving_ethical_status
-    UNION ALL
-    SELECT 'p3m', COUNT(*), SUM(status=1), SUM(status=0), MAX(last_sync) FROM transferpicklist_past3months_status
-");
+    ", array(
+    $_sumPart('ig',  'transferpicklist_itemgrade_status'),
+    $_sumPart('nm',  'transferpicklist_nonmoving_status'),
+    $_sumPart('nme', 'transferpicklist_nonmoving_ethical_status'),
+    $_sumPart('sm',  'transferpicklist_slowmoving_status'),
+    $_sumPart('sme', 'transferpicklist_slowmoving_ethical_status'),
+    $_sumPart('p3m', 'transferpicklist_past3months_status'),
+)));
 if ($sumQ) {
     while ($sr = mysqli_fetch_assoc($sumQ)) {
         switch ($sr['src']) {
