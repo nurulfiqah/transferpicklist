@@ -20,6 +20,10 @@ tplT('Login check + database connect (outer app)');
 $_tpl_proc_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
 if (!$_tpl_proc_access) { redirect('/odb/permission.php'); }
 
+// Read-only page: release the PHP session lock now, so a slow request here never makes the
+// user's other pages wait (PHP lets only one request per session hold the session at a time).
+if (session_status() === PHP_SESSION_ACTIVE) { session_write_close(); }
+
 $listType       = isset($_GET['list']) && $_GET['list'] === 'slowmoving' ? 'slowmoving' : 'nonmoving';
 $filterSearch   = isset($_GET['search'])    ? trim($_GET['search'])    : '';
 $filterOutlet   = isset($_GET['outlet']) ? trim($_GET['outlet']) : '';

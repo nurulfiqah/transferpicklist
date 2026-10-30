@@ -15,6 +15,10 @@ mysqli_report(MYSQLI_REPORT_OFF);
 // Super Admin, Super Admin (transferpicklist_autho = 1) or Procurement (department 18) — read-only page
 $_tpl_ig_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
 if (!$_tpl_ig_access) { redirect('/odb/permission.php'); }
+
+// Read-only page: release the PHP session lock now, so a slow request here never makes the
+// user's other pages wait (PHP lets only one request per session hold the session at a time).
+if (session_status() === PHP_SESSION_ACTIVE) { session_write_close(); }
 tplT('Login check + database connect (outer app)');
 
 // transferpicklist_itemgrade is very large (~13M rows on production), so every query
@@ -74,7 +78,7 @@ if (isset($_GET['export'])) {
         header('Content-Type: text/csv');
         header('Content-Disposition: attachment; filename="itemgrade_' . date('Ymd') . '.csv"');
         $out = fopen('php://output', 'w');
-        fputcsv($out, array('#', 'Outlet Code', 'Outlet ACMM', 'Item Code', 'Item Description', 'Item Grade', 'Item Model', 'Last Sync'));
+        fputcsv($out, array('#', 'Outlet Code', 'Outlet ACMM', 'Item Code', 'Item Description', 'Item Grade', 'Last Sync'));
         $conn->real_query("
             SELECT o.code AS outlet_code, o.acmm_id, i.item_code, s.name AS item_name, i.item_grade, i.item_model, i.timestamp
             FROM transferpicklist_itemgrade i
@@ -87,7 +91,7 @@ if (isset($_GET['export'])) {
         $n = 1;
         while ($res && $r = $res->fetch_assoc()) {
             $acmm = !empty($r['acmm_id']) ? "'" . str_pad((int)$r['acmm_id'], 4, '0', STR_PAD_LEFT) : '';
-            fputcsv($out, array($n++, $r['outlet_code'], $acmm, $r['item_code'], $r['item_name'], $r['item_grade'], $r['item_model'], $r['timestamp']));
+            fputcsv($out, array($n++, $r['outlet_code'], $acmm, $r['item_code'], $r['item_name'], $r['item_grade'], $r['timestamp']));
             if ($n % 1000 === 0) { flush(); }
         }
         fclose($out);
@@ -306,11 +310,10 @@ tplT('Stats (synced outlets / data as of)');
         <th>Item Code</th>
         <th>Item Description</th>
         <th width="90">Item Grade</th>
-        <th>Item Model</th>
         <th width="130">Last Sync</th>
     </tr>
     <?php if (empty($rows)): ?>
-    <tr><td colspan="7" class="alpro-center alpro-muted">No records found.</td></tr>
+    <tr><td colspan="6" class="alpro-center alpro-muted">No records found.</td></tr>
     <?php endif; ?>
     <?php $rn = $offset + 1; foreach ($rows as $r):
         $acmm = !empty($r['acmm_id']) ? str_pad((int)$r['acmm_id'], 4, '0', STR_PAD_LEFT) : '';
@@ -331,7 +334,6 @@ tplT('Stats (synced outlets / data as of)');
             <b><?php echo htmlspecialchars($r['item_grade'] !== null && $r['item_grade'] !== '' ? $r['item_grade'] : '—'); ?></b>
             <?php endif; ?>
         </td>
-        <td><?php echo htmlspecialchars($r['item_model'] ? $r['item_model'] : '—'); ?></td>
         <td class="alpro-center" style="font-size:12px;"><?php echo $r['timestamp'] ? htmlspecialchars(date('d M Y H:i', strtotime($r['timestamp']))) : '—'; ?></td>
     </tr>
     <?php endforeach; ?>

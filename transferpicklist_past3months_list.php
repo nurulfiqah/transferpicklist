@@ -15,6 +15,10 @@ mysqli_report(MYSQLI_REPORT_OFF);
 // Super Admin, Super Admin (transferpicklist_autho = 1) or Procurement (department 18) — read-only page
 $_tpl_p3m_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
 if (!$_tpl_p3m_access) { redirect('/odb/permission.php'); }
+
+// Read-only page: release the PHP session lock now, so a slow request here never makes the
+// user's other pages wait (PHP lets only one request per session hold the session at a time).
+if (session_status() === PHP_SESSION_ACTIVE) { session_write_close(); }
 tplT('Login check + database connect (outer app)');
 
 $filterOutlet   = isset($_GET['outlet'])    ? trim($_GET['outlet'])    : '';
@@ -27,7 +31,12 @@ $offset         = ($page - 1) * $perPage;
 // Build WHERE (shared by the page and the CSV export)
 // Search matches item code OR item description (same as the Non/Slow Moving search).
 $where = '1=1';
-if ($filterOutlet !== '') { $where .= " AND o.code = '" . $conn->real_escape_string($filterOutlet) . "'"; }
+if ($filterOutlet !== '') {
+    // outlet code -> id once, so the filter can use the (outlet_id, month_year, item_code) index
+    $oRes = $conn->query("SELECT id FROM outlet WHERE code = '" . $conn->real_escape_string($filterOutlet) . "' LIMIT 1");
+    $oRow = $oRes ? $oRes->fetch_assoc() : null;
+    $where .= $oRow ? " AND p.outlet_id = " . (int)$oRow['id'] : " AND 1=0";
+}
 if ($filterMonth  !== '') { $where .= " AND p.month_year = '" . $conn->real_escape_string($filterMonth) . "'"; }
 if ($filterItem   !== '') {
     // Look up matching descriptions ONCE in simple, then filter by that literal code list.
@@ -69,7 +78,7 @@ if (isset($_GET['export'])) {
 }
 
 // Count (filtered)
-$totalRes   = $conn->query("SELECT COUNT(*) as cnt FROM transferpicklist_past3months p JOIN outlet o ON o.id = p.outlet_id WHERE $where");
+$totalRes   = $conn->query("SELECT COUNT(*) as cnt FROM transferpicklist_past3months p WHERE $where");
 $totalItems = $totalRes ? (int)$totalRes->fetch_assoc()['cnt'] : 0;
 tplT('Count records');
 $totalPages = max(1, ceil($totalItems / $perPage));
@@ -94,19 +103,34 @@ $syncRes  = $conn->query("SELECT MAX(last_sync) AS latest FROM transferpicklist_
 if ($syncRes && $sr = $syncRes->fetch_assoc()) { $syncDate = $sr['latest']; }
 tplT('Data as of');
 
-// Main query
-$rows = array();
-$res  = $conn->query("
-    SELECT o.code as outlet_code, o.acmm_id, p.month_year, p.item_code,
-           s.name as item_name, p.last_month_closing, p.qty_stock
-    FROM transferpicklist_past3months p
-    JOIN outlet o ON o.id = p.outlet_id
-    LEFT JOIN simple s ON s.item_code = p.item_code
+// Main query, in two cheap steps (sorting ~2M joined rows by outlet CODE took 85s on production):
+//  a) this page's ids straight from uq_outlet_month_item (outlet_id, month_year, item_code),
+//     which is already in display order — no JOIN, no sort, no full-row reads;
+//  b) the full rows + outlet + description for just those ids.
+// Order = outlet (by id), month, item code. With an item search the item_code index is left
+// free to narrow the rows first.
+$rows   = array();
+$idxHint = ($filterItem === '') ? 'FORCE INDEX (uq_outlet_month_item)' : '';
+$ids    = array();
+$idRes  = $conn->query("
+    SELECT p.id FROM transferpicklist_past3months p $idxHint
     WHERE $where
-    ORDER BY o.code, p.month_year DESC, p.item_code
+    ORDER BY p.outlet_id, p.month_year, p.item_code
     LIMIT $perPage OFFSET $offset
 ");
-while ($res && $r = $res->fetch_assoc()) { $rows[] = $r; }
+while ($idRes && $r = $idRes->fetch_assoc()) { $ids[] = (int)$r['id']; }
+if (!empty($ids)) {
+    $res = $conn->query("
+        SELECT o.code as outlet_code, o.acmm_id, p.month_year, p.item_code,
+               s.name as item_name, p.last_month_closing, p.qty_stock
+        FROM transferpicklist_past3months p
+        JOIN outlet o ON o.id = p.outlet_id
+        LEFT JOIN simple s ON s.item_code = p.item_code
+        WHERE p.id IN (" . implode(',', $ids) . ")
+        ORDER BY p.outlet_id, p.month_year, p.item_code
+    ");
+    while ($res && $r = $res->fetch_assoc()) { $rows[] = $r; }
+}
 tplT('Load 50 rows (sorted by outlet, month, item)');
 
 // URL builder
