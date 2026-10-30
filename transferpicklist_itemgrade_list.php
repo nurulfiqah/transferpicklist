@@ -107,22 +107,55 @@ if ($hasFilter) {
     $countIsEstimate = true;
 }
 $totalPages = max(1, (int)ceil($totalItems / $perPage));
+// Without a filter only the first IG_MAX_UNFILTERED_PAGES pages can be opened — choose an
+// Outlet / Grade / Search to see the rest.
+define('IG_MAX_UNFILTERED_PAGES', 200);
+$pagesCapped = false;
+if (!$hasFilter && $totalPages > IG_MAX_UNFILTERED_PAGES) {
+    $totalPages  = IG_MAX_UNFILTERED_PAGES;
+    $pagesCapped = true;
+}
 tplT('Count records');
 $page       = min($page, $totalPages);
 $offset     = ($page - 1) * $perPage;
 
-// Page rows (uniq_outlet_item index gives this order directly)
-$rows  = array();
-$codes = array();
-$res = $conn->query("
-    SELECT i.outlet_id, o.code AS outlet_code, o.acmm_id, i.item_code, i.item_grade, i.item_model, i.timestamp
-    FROM transferpicklist_itemgrade i
-    JOIN outlet o ON o.id = i.outlet_id
+// Page rows, in two cheap steps:
+//  a) the ids of this page, read from an index only — no JOIN (joining outlet here let the
+//     optimizer sort all ~13M rows first) and no full-row reads while skipping the OFFSET;
+//  b) the full rows for just those ids, plus outlet code/ACMM for them.
+// No grade/search filter -> force uniq_outlet_item(outlet_id, item_code), which is already in
+// display order. With a grade filter idx_grade_outlet(item_grade, outlet_id, item_code) is in
+// order too; with a search the item_code index narrows the rows first.
+$rows   = array();
+$codes  = array();
+$idxHint = ($filterGrade === '' && $filterSearch === '') ? 'FORCE INDEX (uniq_outlet_item)' : '';
+$ids    = array();
+$idRes  = $conn->query("
+    SELECT i.id
+    FROM transferpicklist_itemgrade i $idxHint
     WHERE $whereSql
     ORDER BY i.outlet_id, i.item_code
     LIMIT $perPage OFFSET $offset
 ");
-while ($res && $r = $res->fetch_assoc()) { $rows[] = $r; $codes[$r['item_code']] = true; }
+while ($idRes && $r = $idRes->fetch_assoc()) { $ids[] = (int)$r['id']; }
+if (!empty($ids)) {
+    $res = $conn->query("
+        SELECT i.outlet_id, i.item_code, i.item_grade, i.item_model, i.timestamp
+        FROM transferpicklist_itemgrade i
+        WHERE i.id IN (" . implode(',', $ids) . ")
+        ORDER BY i.outlet_id, i.item_code
+    ");
+    $outletIds = array();
+    while ($res && $r = $res->fetch_assoc()) { $rows[] = $r; $codes[$r['item_code']] = true; $outletIds[(int)$r['outlet_id']] = true; }
+    $outletInfo = array();
+    $oRes = $conn->query("SELECT id, code, acmm_id FROM outlet WHERE id IN (" . implode(',', array_keys($outletIds)) . ")");
+    while ($oRes && $o = $oRes->fetch_assoc()) { $outletInfo[(int)$o['id']] = $o; }
+    foreach ($rows as $k => $r) {
+        $o = isset($outletInfo[(int)$r['outlet_id']]) ? $outletInfo[(int)$r['outlet_id']] : null;
+        $rows[$k]['outlet_code'] = $o ? $o['code'] : '';
+        $rows[$k]['acmm_id']     = $o ? $o['acmm_id'] : '';
+    }
+}
 tplT('Load 50 rows');
 
 // Descriptions for the 50 rows only
@@ -140,8 +173,14 @@ $olRes = $conn->query("SELECT outlet_code FROM transferpicklist_itemgrade_status
 while ($olRes && $r = $olRes->fetch_assoc()) { $outletList[] = $r['outlet_code']; }
 tplT('Outlet dropdown');
 $gradeList = array();
-$gRes = $conn->query("SELECT item_grade FROM transferpicklist_itemgrade WHERE item_grade IS NOT NULL AND item_grade != '' GROUP BY item_grade ORDER BY item_grade");
-while ($gRes && $r = $gRes->fetch_assoc()) { $gradeList[] = $r['item_grade']; }
+$_prevGrade = '';
+for ($_g = 0; $_g < 100; $_g++) {   // "next grade after the previous one" — one index lookup each
+    $gRes = $conn->query("SELECT MIN(item_grade) AS g FROM transferpicklist_itemgrade WHERE item_grade > '" . $conn->real_escape_string($_prevGrade) . "'");
+    $gRow = $gRes ? $gRes->fetch_assoc() : null;
+    if (!$gRow || $gRow['g'] === null) { break; }
+    $gradeList[] = $gRow['g'];
+    $_prevGrade  = $gRow['g'];
+}
 tplT('Grade dropdown');
 
 // Stats: synced outlets + data as of
@@ -286,6 +325,9 @@ tplT('Stats (synced outlets / data as of)');
 
 <!-- PAGINATION -->
 <?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage, $countIsEstimate); } // shared list footer (transferpicklist_pager.php) ?>
+<?php if ($pagesCapped): ?>
+<div class="alpro-muted" style="font-size:12px; text-align:right; margin-top:4px;">Only the first <?php echo IG_MAX_UNFILTERED_PAGES; ?> pages are shown without a filter — choose an Outlet, Grade or Search to see the rest.</div>
+<?php endif; ?>
 
 <?php
 tplT('Build page HTML');
