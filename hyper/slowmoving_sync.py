@@ -164,17 +164,19 @@ def download_outlet_codes(view_id, token, site_id):
 
 
 def register_new_outlets(conn, token, site_id):
-    """Cross-check Tableau's live outlet list (union of the flat/down + up
-    outlet-list views, same as first-run bootstrap) against the status table
-    and INSERT any outlet that's ODB-active + confirmed present in Tableau but
-    has no status row yet — e.g. a newly opened store. Without this, a new
-    outlet is silently skipped by every future sync forever, since load_outlets()
-    only downloads the Tableau outlet list on the very first run ever (when the
-    status table is completely empty), never again after that.
-    Only compares against outlets Tableau itself confirms exist — never the raw
-    `outlet` table alone, which also contains ~190 non-outlet codes (HQ, admin,
-    franchise, etc.) that were never real Tableau stores and would otherwise
-    get registered as permanently-failing entries."""
+    """Add a status row for every ODB-active outlet that should be synced but has
+    none yet — e.g. a newly opened store. Without this, an outlet is silently
+    skipped by every future sync forever, since load_outlets() only builds the
+    list from Tableau on the very first run ever (when the status table is empty).
+    Outlets come from TWO sources:
+      1. Tableau's live Slow Moving outlet lists (flat/down + up views);
+      2. transferpicklist_nonmoving_status — the same list Slow Moving Ethical
+         uses. Tableau's Slow Moving list leaves out outlets that have no
+         slow-moving items at that moment (QKCMOE / NHQRS1 were never synced
+         because of this), so without source 2 they never get a row. Now they do,
+         and show as "0 records from Tableau" on Sync Status instead of vanishing.
+    Never the raw `outlet` table alone — it also contains ~190 non-outlet codes
+    (HQ, admin, franchise, etc.) that were never real Tableau stores."""
     codes_flat, err_flat = download_outlet_codes(VIEW_ID_OUTLET_FLAT_DOWN, token, site_id)
     if err_flat:
         log.warning(f"[NewOutlet] Flat/Down outlet list failed: {err_flat}")
@@ -183,20 +185,23 @@ def register_new_outlets(conn, token, site_id):
     if err_up:
         log.warning(f"[NewOutlet] Up outlet list failed: {err_up}")
         codes_up = []
-
-    all_codes = list(set(codes_flat) | set(codes_up))
-    if not all_codes:
-        log.warning("[NewOutlet] Tableau outlet list came back empty — skipping new-outlet check this run.")
-        return
+    tableau_codes = list(set(codes_flat) | set(codes_up))
+    if not tableau_codes:
+        log.warning("[NewOutlet] Tableau outlet list came back empty — using the Non-Moving outlet list only this run.")
 
     with conn.cursor(pymysql.cursors.DictCursor) as cur:
-        fmt = ",".join(["%s"] * len(all_codes))
+        tableau_cond = ""
+        params = ()
+        if tableau_codes:
+            tableau_cond = "o.code IN (" + ",".join(["%s"] * len(tableau_codes)) + ") OR "
+            params = tuple(tableau_codes)
         cur.execute(f"""
             SELECT o.id, o.code
             FROM outlet o
-            LEFT JOIN transferpicklist_slowmoving_status s ON s.outlet_id = o.id
-            WHERE o.recycle = 0 AND o.code IN ({fmt}) AND s.outlet_id IS NULL
-        """, tuple(all_codes))
+            LEFT JOIN transferpicklist_slowmoving_status s ON s.outlet_code = o.code
+            WHERE o.recycle = 0 AND s.outlet_code IS NULL
+              AND ({tableau_cond}o.code IN (SELECT outlet_code FROM transferpicklist_nonmoving_status))
+        """, params)
         new_outlets = cur.fetchall()
 
     if not new_outlets:
