@@ -173,13 +173,28 @@ $olRes = $conn->query("SELECT outlet_code FROM transferpicklist_itemgrade_status
 while ($olRes && $r = $olRes->fetch_assoc()) { $outletList[] = $r['outlet_code']; }
 tplT('Outlet dropdown');
 $gradeList = array();
-$_prevGrade = '';
-for ($_g = 0; $_g < 100; $_g++) {   // "next grade after the previous one" — one index lookup each
-    $gRes = $conn->query("SELECT MIN(item_grade) AS g FROM transferpicklist_itemgrade WHERE item_grade > '" . $conn->real_escape_string($_prevGrade) . "'");
-    $gRow = $gRes ? $gRes->fetch_assoc() : null;
-    if (!$gRow || $gRow['g'] === null) { break; }
-    $gradeList[] = $gRow['g'];
-    $_prevGrade  = $gRow['g'];
+// The grade list hardly ever changes, so it is cached in logs/ for 6 hours.
+// On a cache miss: "next grade after the previous one", one lookup per grade — fast only when
+// the table has an index starting with item_grade (idx_grade_outlet, see
+// database/migrations/2026-10-30_itemgrade_grade_index.sql); without it each lookup reads every row.
+$_gCache = __DIR__ . '/logs/itemgrade_grades.json';
+$_gData  = @file_get_contents($_gCache);
+$_gData  = $_gData !== false ? json_decode($_gData, true) : null;
+if (is_array($_gData) && isset($_gData['at'], $_gData['grades']) && time() - (int)$_gData['at'] < 6 * 3600) {
+    $gradeList = $_gData['grades'];
+} else {
+    $_prevGrade = '';
+    for ($_g = 0; $_g < 100; $_g++) {
+        $gRes = $conn->query("SELECT MIN(item_grade) AS g FROM transferpicklist_itemgrade WHERE item_grade > '" . $conn->real_escape_string($_prevGrade) . "'");
+        $gRow = $gRes ? $gRes->fetch_assoc() : null;
+        if (!$gRow || $gRow['g'] === null) { break; }
+        $gradeList[] = $gRow['g'];
+        $_prevGrade  = $gRow['g'];
+    }
+    if (!empty($gradeList)) {
+        if (!is_dir(dirname($_gCache))) { @mkdir(dirname($_gCache), 0775, true); }
+        @file_put_contents($_gCache, json_encode(array('at' => time(), 'grades' => $gradeList)));
+    }
 }
 tplT('Grade dropdown');
 
