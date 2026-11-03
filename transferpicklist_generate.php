@@ -37,7 +37,11 @@ function tplAutoGenCheck($conn) {
     $latest     = null;
     $problems   = array();
     foreach ($syncs as $label => $table) {
-        $r = $conn->query("SELECT COUNT(*) AS total, SUM(status = 0) AS pending, MAX(last_sync) AS last FROM $table");
+        // Active outlets only (outlet.recycle = 0) — same rule as the syncs and the Sync Status
+        // cards. An inactive outlet left "pending" (e.g. NS2BA1) is never synced again and
+        // would otherwise block auto-generate forever.
+        $r = $conn->query("SELECT COUNT(*) AS total, SUM(t.status = 0) AS pending, MAX(t.last_sync) AS last
+                           FROM $table t JOIN outlet o ON o.code = t.outlet_code AND o.recycle = 0");
         if (!$r) { $problems[] = "$label: status table not found"; continue; }
         $row = $r->fetch_assoc();
         if ((int)$row['total'] === 0) {
