@@ -1,4 +1,7 @@
 <?php
+// ── Timing debug: add ?debug=1 to the URL (admins only) to see how long each step takes ──
+$_tplT0 = microtime(true); $_tplTimes = array(); $_tplLast = $_tplT0;
+function tplT($label) { global $_tplTimes, $_tplLast; $now = microtime(true); $_tplTimes[] = array($label, $now - $_tplLast); $_tplLast = $now; }
 require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
@@ -15,7 +18,10 @@ $_tpl_is_admin = (int)$transferpicklist_autho === 1;
 $_tpl_is_proc  = $_tpl_is_admin || ((int)$department === 18);
 // Dashboard: Super Admin (transferpicklist = 1) and Procurement (dept 18) — both see everything
 if (!$_tpl_is_proc) { redirect('/odb/permission.php'); }
-
+tplT('Login check + database connect (outer app)');
+// Read-only page: release the PHP session lock now, so a slow request here never makes the
+// user's other pages wait.
+if (session_status() === PHP_SESSION_ACTIVE) { session_write_close(); }
 
 // Stats
 $stats = array('draft' => 0, 'published' => 0, 'completed' => 0);
@@ -30,7 +36,7 @@ if ($stmt) {
     }
     $stmt->close();
 }
-
+tplT('Stats (draft / published / completed)');
 
 // Pick list table
 $picklists = false;
@@ -57,6 +63,7 @@ if ($stmt) {
     $picklists = $stmt->get_result();
     $stmt->close();
 }
+tplT('Pick list table (item counts per pick list)');
 ?>
 <!DOCTYPE html>
 <html>
@@ -170,6 +177,25 @@ table.tpl-dash-table .tpl-view-icon svg{width:16px;height:16px;}
 </table>
 </fieldset>
 
+<?php
+tplT('Build page HTML');
+if (isset($_GET['debug']) && (int)$transferpicklist_autho === 1):
+    $_tplTotal = microtime(true) - $_tplT0;
+?>
+<div class="alpro-box" style="margin-top:12px; font-size:12px;">
+    <b>Timing debug</b> — total <b><?php echo number_format($_tplTotal, 2); ?>s</b> (server side)
+    <table class="myTable alpro-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF" style="margin-top:6px;">
+        <tr><th style="text-align:left;">Step</th><th class="alpro-center" width="110">Seconds</th><th class="alpro-center" width="90">% of total</th></tr>
+        <?php foreach ($_tplTimes as $_tt): ?>
+        <tr<?php echo $_tt[1] >= 1 ? ' style="background:#fff3e0;"' : ''; ?>>
+            <td><?php echo htmlspecialchars($_tt[0]); ?></td>
+            <td class="alpro-center"><b><?php echo number_format($_tt[1], 3); ?></b></td>
+            <td class="alpro-center"><?php echo $_tplTotal > 0 ? round($_tt[1] / $_tplTotal * 100) : 0; ?>%</td>
+        </tr>
+        <?php endforeach; ?>
+    </table>
+</div>
+<?php endif; ?>
 <?php
 $connect = 0;
 include('../common/index_adv.php');

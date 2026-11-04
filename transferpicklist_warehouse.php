@@ -35,6 +35,9 @@ if ((int)$department > 0) {
 $_wh_is_individually_granted = in_array((int)$department, array(22, 29, 30), true); // WLD (HQ), WLD (Sabah), WLD (Sarawak)
 $_wh_is_proc = ((int)$transferpicklist_autho === 1) || ((int)$department === 18) || $_wh_is_bu || $_wh_is_individually_granted;
 if (!$_wh_is_proc) { redirect('/odb/permission.php'); }
+// This page never writes to $_SESSION, so release the PHP session lock now — a slow request
+// here then never makes the user's other pages wait.
+if (session_status() === PHP_SESSION_ACTIVE) { session_write_close(); }
 $_wh_is_super_admin = (int)$transferpicklist_autho === 1;
 $_wh_is_admin       = (int)$transferpicklist_autho === 1;
 
