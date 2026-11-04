@@ -463,18 +463,22 @@ if ($whOptRes) {
 // Load picklist list FIRST so we can set the default $filterPicklist before running heavy queries
 $picklistOptions = array();
 // Warehouse items are only ever generated into the "-warehouse" pick list (Phase 2), never
-// into "-outlet" — so those are picked by name, and only old (legacy-named) pick lists still
-// need the item lookup. The OR also stops MariaDB turning EXISTS into a scan of every
-// warehouse item (2.8s on production).
+// into "-outlet" — so those are picked by name. Only old (legacy-named) pick lists still need
+// an item check, done as one single-row index probe each: inside one SQL statement (EXISTS)
+// MariaDB scanned every warehouse item instead (2.8s on production).
 $_plRes = $conn->query("
     SELECT p.id, p.picklist_no, p.status, p.timestamp
     FROM transferpicklist_picklist p
-    WHERE p.picklist_no LIKE '%-warehouse'
-       OR (p.picklist_no NOT LIKE '%-outlet'
-           AND EXISTS (SELECT 1 FROM transferpicklist_item i WHERE i.picklist_id = p.id AND i.priority_type = 'warehouse'))
+    WHERE p.picklist_no NOT LIKE '%-outlet'
     ORDER BY p.timestamp DESC
 ");
-if ($_plRes) { while ($r = $_plRes->fetch_assoc()) { $picklistOptions[] = $r; } }
+while ($_plRes && $r = $_plRes->fetch_assoc()) {
+    if (substr($r['picklist_no'], -10) !== '-warehouse') {
+        $_whChk = $conn->query("SELECT 1 FROM transferpicklist_item WHERE picklist_id = " . (int)$r['id'] . " AND priority_type = 'warehouse' LIMIT 1");
+        if (!$_whChk || $_whChk->num_rows === 0) { continue; }
+    }
+    $picklistOptions[] = $r;
+}
 tplT('Pick list dropdown (all warehouse pick lists)');
 
 if ($filterPicklist === '' && !empty($picklistOptions)) {
