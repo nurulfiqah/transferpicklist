@@ -1,4 +1,7 @@
 <?php
+// ── Timing debug: add &debug=1 to the URL (admins only) to see how long each step takes ──
+$_tplT0 = microtime(true); $_tplTimes = array(); $_tplLast = $_tplT0;
+function tplT($label) { global $_tplTimes, $_tplLast; $now = microtime(true); $_tplTimes[] = array($label, $now - $_tplLast); $_tplLast = $now; }
 require_once('../lock_adv.php');
 $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
@@ -11,17 +14,22 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 // My Outlet Tasks: Super Admin (all outlets) + Area / Outlet Managers (only the outlets in their staff.outlet)
 $_tpl_outlet_access = ((int)$transferpicklist_autho === 1) || (isset($status_semasa) && ($status_semasa === 'Area Manager' || $status_semasa === 'Outlet Manager'));
 if (!$_tpl_outlet_access) { redirect('/odb/permission.php'); }
+tplT('Login check + database connect (outer app)');
+// This page never writes to $_SESSION, so release the PHP session lock now — a slow request
+// here then never makes the user's other pages wait.
+if (session_status() === PHP_SESSION_ACTIVE) { session_write_close(); }
 
 // Ensure recycle column exists on transferpicklist_item
-$_cr = $conn->query("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transferpicklist_item' AND COLUMN_NAME = 'recycle' LIMIT 1");
+$_cr = $conn->query("SHOW COLUMNS FROM transferpicklist_item LIKE 'recycle'");
 if ($_cr && $_cr->num_rows === 0) {
     $conn->query("ALTER TABLE transferpicklist_item ADD COLUMN recycle TINYINT(1) NOT NULL DEFAULT 0");
 }
 // Who confirmed an item and when (see database/migrations/2026-10-29_item_confirmed_by.sql)
-$_cb = $conn->query("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transferpicklist_item' AND COLUMN_NAME = 'confirmed_by' LIMIT 1");
+$_cb = $conn->query("SHOW COLUMNS FROM transferpicklist_item LIKE 'confirmed_by'");
 if ($_cb && $_cb->num_rows === 0) {
     $conn->query("ALTER TABLE transferpicklist_item ADD COLUMN confirmed_by VARCHAR(100) NULL, ADD COLUMN confirmed_at DATETIME NULL");
 }
+tplT('Column checks');
 $_confirmBy  = $conn->real_escape_string(isset($nama_staff) && $nama_staff !== '' ? $nama_staff : (isset($_SESSION['myusername']) ? $_SESSION['myusername'] : ''));
 $_confirmSet = "confirmed_by = '$_confirmBy', confirmed_at = NOW()";
 
@@ -115,6 +123,7 @@ if (!$_is_admin_tpl && count($myOutletIds) > 1) {
         $outlet_id         = $_mIds[$_mPick];
     }
 }
+tplT('My outlets + outlet dropdown');
 
 $items           = null;
 $myOutlets       = array();
@@ -406,6 +415,7 @@ if (!empty($myOutletIds)) {
             }
         }
 
+        tplT('Save (confirm / cancel / remake)');
         // Load all published picklists for this outlet (for filter dropdown)
         $picklistOptions = array();
         $res = $conn->query("
@@ -424,6 +434,7 @@ if (!empty($myOutletIds)) {
         if ($_is_admin_tpl && $filterPicklist !== '') {
             $adminOutletList = tplAdminOutletsForPicklist($conn, $filterPicklist, 'from_outlet_id', $filterAdminOutlet);
         }
+        tplT('Pick list dropdown + outlet dropdown');
         $filterPriority   = isset($_GET['priority'])    ? trim($_GET['priority'])    : '';
         if (!tplRouteFitsKind($filterPriority, tplPicklistKind($filterPicklist))) { $filterPriority = ''; }
         $filterStatus     = isset($_GET['status'])      ? trim($_GET['status'])      : '';
@@ -465,10 +476,12 @@ if (!empty($myOutletIds)) {
             }
         }
         $whereStr = implode(' AND ', $whereClauses);
+        tplT('Filters (search / item type lookups)');
 
         // Count all pending items across all pages (for Confirm All button)
         $pendingAllRes = $conn->query("SELECT COUNT(*) as cnt FROM transferpicklist_item i JOIN transferpicklist_picklist p ON p.id=i.picklist_id AND p.status='published' WHERE $whereStr AND i.status='pending'");
         $pendingAllCount = $pendingAllRes ? (int)$pendingAllRes->fetch_assoc()['cnt'] : 0;
+        tplT('Count pending (Confirm All)');
 
         // Who confirmed and when — grouped per confirm action, shown once on the last page
         $clRes = $conn->query("
@@ -480,6 +493,7 @@ if (!empty($myOutletIds)) {
             ORDER BY at DESC LIMIT 10
         ");
         while ($clRes && $cl = $clRes->fetch_assoc()) { $confirmLog[] = $cl; }
+        tplT('Confirmed-by log');
 
         // EXPORT CSV
         if (isset($_GET['export'])) {
@@ -593,6 +607,7 @@ if (!empty($myOutletIds)) {
         } else {
             $items = isset($tmpRows) ? $tmpRows : array();
         }
+        tplT('Count + load rows + descriptions');
     } else {
         // Load all published picklists for this outlet (for filter dropdown)
         $picklistOptions = array();
@@ -611,6 +626,7 @@ if (!empty($myOutletIds)) {
         if ($_is_admin_tpl && $filterPicklist !== '') {
             $adminOutletList = tplAdminOutletsForPicklist($conn, $filterPicklist, 'to_outlet_id', $filterAdminOutlet);
         }
+        tplT('Pick list dropdown + outlet dropdown');
         $filterPriority  = isset($_GET['priority'])    ? trim($_GET['priority'])    : '';
         if (!tplRouteFitsKind($filterPriority, tplPicklistKind($filterPicklist))) { $filterPriority = ''; }
         $filterStatus    = isset($_GET['status'])      ? trim($_GET['status'])      : 'transferred';
@@ -651,6 +667,7 @@ if (!empty($myOutletIds)) {
             ORDER BY i.status ASC, i.item_code ASC
             LIMIT $perPage OFFSET $offset
         ");
+        tplT('Count + load rows');
     }
 
     $res = $conn->query("SELECT code, comp_name FROM outlet WHERE id IN ($inIds) ORDER BY code");
@@ -1079,6 +1096,25 @@ $pgBase = 'transferpicklist_outlet.php?view=incoming'
 <?php if ($totalItems > 0) { tplPager($page, $totalPages, $totalItems, $perPage); } // shared list footer (transferpicklist_pager.php) ?>
 <?php endif; ?>
 
+<?php
+tplT('Build page HTML');
+if (isset($_GET['debug']) && (int)$transferpicklist_autho === 1):
+    $_tplTotal = microtime(true) - $_tplT0;
+?>
+<div class="alpro-box" style="margin-top:12px; font-size:12px;">
+    <b>Timing debug</b> — total <b><?php echo number_format($_tplTotal, 2); ?>s</b> (server side)
+    <table class="myTable alpro-table" width="100%" cellpadding="4" cellspacing="1" bgcolor="#EFEFEF" style="margin-top:6px;">
+        <tr><th style="text-align:left;">Step</th><th class="alpro-center" width="110">Seconds</th><th class="alpro-center" width="90">% of total</th></tr>
+        <?php foreach ($_tplTimes as $_tt): ?>
+        <tr<?php echo $_tt[1] >= 1 ? ' style="background:#fff3e0;"' : ''; ?>>
+            <td><?php echo htmlspecialchars($_tt[0]); ?></td>
+            <td class="alpro-center"><b><?php echo number_format($_tt[1], 3); ?></b></td>
+            <td class="alpro-center"><?php echo $_tplTotal > 0 ? round($_tt[1] / $_tplTotal * 100) : 0; ?>%</td>
+        </tr>
+        <?php endforeach; ?>
+    </table>
+</div>
+<?php endif; ?>
 <?php
 $connect = 0;
 include('../common/index_adv.php');
