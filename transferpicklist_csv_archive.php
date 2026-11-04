@@ -202,7 +202,7 @@ function selfUrl($params) {
 .arc-card .meta { font-size:10px; color:#888; margin-top:6px; }
 @media (max-width: 900px) { .arc-cards { grid-template-columns:repeat(3, 1fr); } }
 @media (max-width: 480px) { .arc-cards { grid-template-columns:repeat(2, 1fr); } }
-.alpro-box p, .arc-note, .arc-crumb { text-align:left; }
+.alpro-box p, .arc-crumb { text-align:left; }
 /* Text columns left-aligned; columns marked .alpro-center (#, counts, sizes, times, buttons) stay centred */
 .alpro-box table.myTable th,
 .alpro-box table.myTable td { text-align:left; }
@@ -224,7 +224,6 @@ function selfUrl($params) {
 .arc-icon-dl:hover{background:#e8f5e9;}
 .arc-crumb { font-size:13px; margin-bottom:12px; color:#555; }
 .arc-crumb a { color:#1976d2; text-decoration:none; }
-.arc-note { font-size:12px; color:#777; margin-bottom:12px; }
 .arc-preview-wrap { overflow:auto; max-height:600px; border:1px solid #ddd; border-radius:4px; }
 .arc-preview-wrap table { font-size:12px; }
 .arc-preview-wrap th { position:sticky; top:0; z-index:1; }
@@ -241,12 +240,6 @@ function selfUrl($params) {
 <?php include('transferpicklist_sidebar.php'); ?>
 
 <div class="alpro-box">
-
-    <div class="arc-note">
-        Raw CSV exactly as Tableau sent it, saved by every sync — one folder per day, one file per outlet
-        (Slow Moving: <b>_flat_down</b> and <b>_up</b> files per outlet). If an outlet is synced again the same day, the later file gets the sync time added, e.g. <b>QKC3M1_170042.csv</b> = synced at 5:00:42 PM. Use it as evidence of what Tableau showed at that time.
-        <br><b>Folders older than 5 months are deleted automatically</b> — download anything you need to keep longer.
-    </div>
 
     <?php if (empty($dashboards)): ?>
         <p>No CSV files saved yet. Files appear here after the next sync runs.</p>
