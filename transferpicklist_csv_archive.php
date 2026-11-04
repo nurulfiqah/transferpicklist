@@ -216,6 +216,12 @@ function selfUrl($params) {
 .arc-filter-grow{flex:1 1 0;min-width:0;}
 .arc-filter-fixed{flex:0 0 auto;white-space:nowrap;}
 .arc-row-btn{padding:3px 10px;font-size:12px;}
+/* Preview / Download as small icons (same style as the Dashboard's eye icon) */
+.arc-icon{display:inline-flex;align-items:center;justify-content:center;width:26px;height:22px;border-radius:5px;text-decoration:none;vertical-align:middle;}
+.arc-icon-view{color:#1976d2;}
+.arc-icon-dl{color:#2e7d32;}
+.arc-icon-view:hover{background:#e3f2fd;}
+.arc-icon-dl:hover{background:#e8f5e9;}
 .arc-crumb { font-size:13px; margin-bottom:12px; color:#555; }
 .arc-crumb a { color:#1976d2; text-decoration:none; }
 .arc-note { font-size:12px; color:#777; margin-bottom:12px; }
@@ -338,8 +344,8 @@ function selfUrl($params) {
                     <td class="alpro-center"><?php echo $fi['size'] === 0 ? '<span style="color:#aaa;">empty</span>' : fmtSize($fi['size']); ?></td>
                     <td class="alpro-center"><?php echo date('d M Y, h:i A', $fi['mtime']); ?></td>
                     <td class="alpro-center">
-                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $r, 'f' => $fi['name'], 'view' => 1))); ?>" class="alpro-btn alpro-btn-grey arc-row-btn">Preview</a>
-                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $r, 'f' => $fi['name'], 'dl' => 1))); ?>" class="alpro-btn alpro-btn-blue arc-row-btn">Download</a>
+                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $r, 'f' => $fi['name'], 'view' => 1))); ?>" class="arc-icon arc-icon-view" title="Preview"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></a>
+                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $r, 'f' => $fi['name'], 'dl' => 1))); ?>" class="arc-icon arc-icon-dl" title="Download"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -362,8 +368,8 @@ function selfUrl($params) {
                     <td class="alpro-mono"><?php echo htmlspecialchars($h['name']); ?></td>
                     <td class="alpro-center"><?php echo $h['size'] === 0 ? '<span style="color:#aaa;">empty</span>' : fmtSize($h['size']); ?></td>
                     <td class="alpro-center">
-                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $h['run'], 'f' => $h['name'], 'view' => 1))); ?>" class="alpro-btn alpro-btn-grey arc-row-btn">Preview</a>
-                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $h['run'], 'f' => $h['name'], 'dl' => 1))); ?>" class="alpro-btn alpro-btn-blue arc-row-btn">Download</a>
+                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $h['run'], 'f' => $h['name'], 'view' => 1))); ?>" class="arc-icon arc-icon-view" title="Preview"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></a>
+                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $h['run'], 'f' => $h['name'], 'dl' => 1))); ?>" class="arc-icon arc-icon-dl" title="Download"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -389,8 +395,8 @@ function selfUrl($params) {
                     <td class="alpro-center"><?php echo count($rf); ?></td>
                     <td class="alpro-center"><?php echo fmtSize($sz); ?></td>
                     <td class="alpro-center">
-                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $rn))); ?>" class="alpro-btn alpro-btn-grey arc-row-btn">Open</a>
-                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $rn, 'zip' => 1))); ?>" class="alpro-btn alpro-btn-green arc-row-btn">Download ZIP</a>
+                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $rn))); ?>" class="arc-icon arc-icon-view" title="Open"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></a>
+                        <a href="<?php echo htmlspecialchars(selfUrl(array('d' => $d, 'r' => $rn, 'zip' => 1))); ?>" class="arc-icon arc-icon-dl" title="Download ZIP"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>
                     </td>
                 </tr>
             <?php endforeach; ?>
