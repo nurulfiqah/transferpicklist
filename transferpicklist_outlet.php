@@ -79,32 +79,22 @@ function tplAdminOutletsForPicklist($conn, $picklistNo, $col, $keepCode) {
 $_is_admin_tpl     = ((int)$transferpicklist_autho === 1);
 $filterAdminOutlet = '';
 $adminOutletList   = array();
+// The outlet dropdown itself is filled later from the selected pick list
+// (tplAdminOutletsForPicklist) — no need to scan every published item here.
 if ($_is_admin_tpl) {
-    $olRes = $conn->query("
-        SELECT DISTINCT o.code
-        FROM transferpicklist_item i
-        JOIN transferpicklist_picklist p ON p.id = i.picklist_id AND p.status = 'published'
-        JOIN outlet o ON o.id = i.from_outlet_id
-        WHERE i.recycle = 0 AND (i.priority_type != 'warehouse' OR i.return_confirmed = 1)
-        ORDER BY o.code
-    ");
-    while ($r = $olRes->fetch_assoc()) { $adminOutletList[] = $r['code']; }
-
     $filterAdminOutlet = isset($_GET['filter_outlet']) ? trim($_GET['filter_outlet']) : '';
     if ($filterAdminOutlet !== '') {
         $oRes = $conn->query("SELECT id FROM outlet WHERE code = '" . $conn->real_escape_string($filterAdminOutlet) . "' AND recycle = 0 LIMIT 1");
         $myOutletIds = array();
         if ($oRes && ($oRow = $oRes->fetch_assoc())) { $myOutletIds[] = (int)$oRow['id']; }
         $outlet_id = !empty($myOutletIds) ? $myOutletIds[0] : 0;
+        $adminOutletList = array($filterAdminOutlet);
     } else {
-        $allORes = $conn->query("
-            SELECT DISTINCT from_outlet_id
-            FROM transferpicklist_item i
-            JOIN transferpicklist_picklist p ON p.id = i.picklist_id AND p.status = 'published'
-            WHERE i.recycle = 0 AND (i.priority_type != 'warehouse' OR i.return_confirmed = 1)
-        ");
+        // All outlets: every outlet id from the (small) outlet table. Reading the DISTINCT
+        // from_outlet_id of every published item instead took ~8s on production.
+        $allORes = $conn->query("SELECT id FROM outlet");
         $myOutletIds = array();
-        while ($r = $allORes->fetch_assoc()) { $myOutletIds[] = (int)$r['from_outlet_id']; }
+        while ($allORes && $r = $allORes->fetch_assoc()) { $myOutletIds[] = (int)$r['id']; }
         $outlet_id = !empty($myOutletIds) ? $myOutletIds[0] : 0;
     }
 }
