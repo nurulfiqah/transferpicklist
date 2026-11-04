@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS `transferpicklist_item` (
   KEY `idx_priority_type` (`priority_type`),
   KEY `idx_picklist_type_recycle` (`picklist_id`,`priority_type`,`recycle`),
   KEY `idx_picklist_priority_recycle` (`picklist_id`,`priority_type`,`recycle`),
+  KEY `idx_dashboard_counts` (`picklist_id`,`status`,`priority_type`,`return_confirmed`,`recycle`),
   KEY `idx_to_outlet_id` (`to_outlet_id`),
   KEY `idx_from_outlet_id` (`from_outlet_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
