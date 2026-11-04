@@ -462,12 +462,16 @@ if ($whOptRes) {
 
 // Load picklist list FIRST so we can set the default $filterPicklist before running heavy queries
 $picklistOptions = array();
-// EXISTS + the (picklist_id, priority_type, recycle) index = one index probe per
-// pick list, instead of joining every warehouse item of every pick list (~4s on production).
+// Warehouse items are only ever generated into the "-warehouse" pick list (Phase 2), never
+// into "-outlet" — so those are picked by name, and only old (legacy-named) pick lists still
+// need the item lookup. The OR also stops MariaDB turning EXISTS into a scan of every
+// warehouse item (2.8s on production).
 $_plRes = $conn->query("
     SELECT p.id, p.picklist_no, p.status, p.timestamp
     FROM transferpicklist_picklist p
-    WHERE EXISTS (SELECT 1 FROM transferpicklist_item i WHERE i.picklist_id = p.id AND i.priority_type = 'warehouse')
+    WHERE p.picklist_no LIKE '%-warehouse'
+       OR (p.picklist_no NOT LIKE '%-outlet'
+           AND EXISTS (SELECT 1 FROM transferpicklist_item i WHERE i.picklist_id = p.id AND i.priority_type = 'warehouse'))
     ORDER BY p.timestamp DESC
 ");
 if ($_plRes) { while ($r = $_plRes->fetch_assoc()) { $picklistOptions[] = $r; } }
@@ -517,9 +521,28 @@ $perPage = tplPerPage(50);
 $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset  = ($page - 1) * $perPage;
 
+// P.Officer / Model / Return / Ownership dropdown options. Building them reads every item code
+// of the pick list and looks each up in the item master (4.3s on production), but they only
+// change when the pick list itself changes — so they're cached per pick list for 6 hours in
+// logs/wh_opts_<id>.json. Deleting the file forces a rebuild.
+$officerList   = array();
+$staffNameMap  = array();
+$modelList     = array();
+$returnList    = array();
+$ownershipList = array();
+$_optCacheFile = $filterPicklistId > 0 ? __DIR__ . '/logs/wh_opts_' . $filterPicklistId . '.json' : '';
+$_optCache     = null;
+if ($_optCacheFile !== '' && is_file($_optCacheFile) && filemtime($_optCacheFile) > time() - 6 * 3600) {
+    $_optCache = json_decode((string)@file_get_contents($_optCacheFile), true);
+}
+if (is_array($_optCache) && isset($_optCache['officer'], $_optCache['model'], $_optCache['return'], $_optCache['ownership'])) {
+    $officerList   = $_optCache['officer'];
+    $modelList     = $_optCache['model'];
+    $returnList    = $_optCache['return'];
+    $ownershipList = $_optCache['ownership'];
+    tplT('P.Officer / Model / Return / Ownership dropdowns (from 6-hour cache)');
+} else {
 // Officer dropdown — Step 1: get distinct item_codes from transferpicklist_item (fast, indexed)
-$officerList  = array();
-$staffNameMap = array();
 if ($filterPicklistId > 0) {
     $_icRes = $conn->query("SELECT DISTINCT item_code FROM transferpicklist_item WHERE picklist_id = $filterPicklistId AND priority_type = 'warehouse' AND recycle = 0");
 } else {
@@ -531,9 +554,6 @@ tplT('Item codes in this pick list');
 
 // Step 2: P.Officer / Model / Return / Ownership dropdown options — ONE pass over simple
 // for this pick list's item codes (was 4 separate lookups with the same long IN list).
-$modelList     = array();
-$returnList    = array();
-$ownershipList = array();
 if (!empty($_icCodes)) {
     $_optSets = array('procurement_officer' => array(), 'model' => array(), 'hq_return_policy' => array(), 'product_ownership' => array());
     $optRes = $conn->query("SELECT DISTINCT procurement_officer, model, hq_return_policy, product_ownership FROM simple WHERE item_code IN (" . implode(',', $_icCodes) . ")");
@@ -554,6 +574,12 @@ if (!empty($_icCodes)) {
     $ownershipList = $_optSets['product_ownership'];
 }
 tplT('P.Officer / Model / Return / Ownership dropdowns (1 item master lookup)');
+if ($_optCacheFile !== '' && !empty($_icCodes) && is_dir(__DIR__ . '/logs')) {
+    @file_put_contents($_optCacheFile, json_encode(array(
+        'officer' => $officerList, 'model' => $modelList, 'return' => $returnList, 'ownership' => $ownershipList,
+    )), LOCK_EX);
+}
+}
 
 // Step 3: get staff names using username column (same logic as original)
 if (!empty($officerList)) {
