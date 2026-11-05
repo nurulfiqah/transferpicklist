@@ -54,8 +54,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_admin'], $_POST['
         $msg = 'Your session expired. Please try again.'; $msg_type = 'error';
     } elseif (!isset($_roleNames[$newRole])) {
         $msg = 'Unknown role.'; $msg_type = 'error';
-    } elseif ($sid === $_meId) {
-        $msg = 'You cannot change your own access.'; $msg_type = 'error';
     } else {
         $row = $conn->query("SELECT id, nama_staff, username, transferpicklist FROM staff WHERE id = $sid AND recycle != 1 LIMIT 1")->fetch_assoc();
         $adminCount = (int)$conn->query("SELECT COUNT(*) c FROM staff WHERE transferpicklist = 1 AND recycle != 1")->fetch_assoc()['c'];
@@ -71,6 +69,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_admin'], $_POST['
             $conn->query("INSERT INTO transferpicklist_admin_log (staff_id, staff_name, action, by_user, created_at) VALUES ($sid, '"
                 . $conn->real_escape_string($row['nama_staff']) . "', '" . $_roleAction[$newRole] . "', '"
                 . $conn->real_escape_string($_byName) . "', '" . date('Y-m-d H:i:s') . "')");
+            // Changed your OWN access away from Super Admin: this page is no longer yours — go to
+            // the module start page (Admin 2 lands on Warehouse Returns; no access → permission page).
+            if ($sid === $_meId && $newRole !== 1) { header('Location: index.php'); exit; }
             header('Location: transferpicklist_admin.php?done=' . $newRole . '&n=' . urlencode($row['nama_staff'])
                 . ($_keepQs !== '' ? '&' . $_keepQs : ''));
             exit;
@@ -198,7 +199,8 @@ function tplAdminBtn($sid, $role, $name, $token, $keepQs, $disabledReason = '') 
             <td><b><?php echo htmlspecialchars($a['nama_staff']); ?></b><?php echo (int)$a['id'] === $_meId ? ' <span class="alpro-muted" style="font-size:11px;">(you)</span>' : ''; ?></td>
             <td><?php echo htmlspecialchars((string)$a['depart_name']); ?></td>
             <td><?php
-                $why = (int)$a['id'] === $_meId ? 'Can\'t remove yourself' : (count($admins) <= 1 ? 'Last Super Admin' : '');
+                // You may change your own access too — only the very last Super Admin is protected
+                $why = count($admins) <= 1 ? 'Last Super Admin' : '';
                 if ($why === '') { tplAdminBtn($a['id'], 2, $a['nama_staff'], $_token, $_keepQs); }
                 tplAdminBtn($a['id'], 0, $a['nama_staff'], $_token, $_keepQs, $why);
             ?></td>
