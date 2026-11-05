@@ -38,9 +38,22 @@ $baseUrl        = 'transferpicklist_procurement.php?list=' . $listType;
 // open was a major cause of slow page loads.
 $item_arr  = array(); // item_code => name
 $model_arr = array(); // item_code => model
-function tplLoadSimple($conn, $inSql, &$item_arr, &$model_arr) {
-    $res = $conn->query("SELECT item_code, name, model FROM simple WHERE item_code IN ($inSql)");
-    if ($res) { while ($r = $res->fetch_assoc()) { $item_arr[$r['item_code']] = $r['name']; $model_arr[$r['item_code']] = $r['model']; } }
+// simple.item_code is latin1 while the transferpicklist_* tables are utf8mb4, so a JOIN or
+// IN (SELECT ...) between them can't use simple's item_code index — MariaDB then scans all
+// ~100k simple rows (for an export JOIN: once per exported row, which is what made the
+// Non Moving export never finish). So: fetch the item codes first, then look them up as
+// plain string literals, which DO use the index — 1000 per query.
+// $inList = already-quoted literals: 'A1','B2'
+function tplLoadSimple($conn, $inList, &$item_arr, &$model_arr) {
+    $res = $conn->query("SELECT item_code, name, model FROM simple WHERE item_code IN ($inList)");
+    while ($res && $r = $res->fetch_assoc()) { $item_arr[$r['item_code']] = $r['name']; $model_arr[$r['item_code']] = $r['model']; }
+}
+// $codeSql = a SELECT returning item codes (exports)
+function tplLoadSimpleFromQuery($conn, $codeSql, &$item_arr, &$model_arr) {
+    $codes = array();
+    $cRes  = $conn->query($codeSql);
+    while ($cRes && $c = $cRes->fetch_row()) { $codes[] = "'" . $conn->real_escape_string($c[0]) . "'"; }
+    foreach (array_chunk($codes, 1000) as $chunk) { tplLoadSimple($conn, implode(',', $chunk), $item_arr, $model_arr); }
 }
 // HQ / Non-HQ type filter as a subquery instead of a giant IN (...) list built in PHP
 function tplTypeFilterSql($col, $filterType) {
@@ -96,7 +109,7 @@ if (isset($_GET['export'])) {
         $exportUnion = "(SELECT outlet_id, item_code, trend_type, last_month_closing, avg_monthly, moi, adjusted_overstock_qty, timestamp, 'regular' AS category FROM transferpicklist_slowmoving UNION ALL SELECT outlet_id, item_code, trend_type, last_month_closing, avg_monthly, moi, adjusted_overstock_qty, timestamp, 'ethical' AS category FROM transferpicklist_slowmoving_ethical)";
 
         // Models only for items that are actually in the slow moving lists
-        tplLoadSimple($conn, "SELECT item_code FROM transferpicklist_slowmoving UNION SELECT item_code FROM transferpicklist_slowmoving_ethical", $item_arr, $model_arr);
+        tplLoadSimpleFromQuery($conn, "SELECT item_code FROM transferpicklist_slowmoving UNION SELECT item_code FROM transferpicklist_slowmoving_ethical", $item_arr, $model_arr);
 
         header('Content-Type: text/csv');
         header('Content-Disposition: attachment; filename="slowmoving_' . date('Ymd') . '.csv"');
@@ -173,23 +186,25 @@ if (isset($_GET['export'])) {
         fputcsv($out, array('#', 'Outlet Short Code', 'Outlet Code', 'Outlet Name', 'Item Code', 'Item Description', 'Category', 'Type', 'Priority', 'Closing Stock (Qty)', 'Avg Past 6M Qty Sold', 'MOI', 'Last Sync'));
         flush();
 
-        // Description + model joined per row (indexed item_code lookup) instead of loading
-        // them for every item in both non moving tables up front.
+        // Descriptions/models for the items in the non moving lists — NOT joined into the
+        // main query (see tplLoadSimple for why). Must run before the unbuffered query below.
+        tplLoadSimpleFromQuery($conn, "SELECT item_code FROM transferpicklist_nonmoving"
+            . ($_nmEthicalExists ? " UNION SELECT item_code FROM transferpicklist_nonmoving_ethical" : ""), $item_arr, $model_arr);
+
         $conn->real_query("
             SELECT o.code as outlet_code, o.acmm_id, o.comp_name as outlet_name,
                    n.item_code, n.closing_stock, n.timestamp, n.category,
-                   n.avg_monthly, sp.name AS item_name, sp.model AS item_model
+                   n.avg_monthly
             FROM $nmUnion n
             JOIN outlet o ON o.id = n.outlet_id
-            LEFT JOIN simple sp ON sp.item_code = n.item_code
             WHERE $where
             ORDER BY n.avg_monthly DESC, n.outlet_id, n.item_code
         ");
         $res = $conn->use_result();
         $rowNum = 1;
         while ($res && $row = $res->fetch_assoc()) {
-            $desc        = $row['item_name'] !== null ? $row['item_name'] : '';
-            $typeLabel   = $row['item_model'] === 'Store/HQ Order' ? 'Non-HQ' : 'HQ';
+            $desc        = isset($item_arr[$row['item_code']]) ? $item_arr[$row['item_code']] : '';
+            $typeLabel   = isset($model_arr[$row['item_code']]) && $model_arr[$row['item_code']] === 'Store/HQ Order' ? 'Non-HQ' : 'HQ';
             $acmm        = !empty($row['acmm_id']) ? "'" . str_pad((int)$row['acmm_id'], 4, '0', STR_PAD_LEFT) : '';
             $oc2         = strtoupper($row['outlet_code']);
             $priority    = strpos($oc2, 'SKK') === 0 ? 'Sabah' : (strpos($oc2, 'Q') === 0 ? 'Sarawak' : 'Peninsular');
