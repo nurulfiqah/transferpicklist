@@ -13,7 +13,7 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 }
 mysqli_report(MYSQLI_REPORT_OFF);
 // Super Admin, Super Admin (transferpicklist_autho = 1) or Procurement (department 18) — read-only page
-$_tpl_ig_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
+$_tpl_ig_access = ((int)$transferpicklist_autho === 1) || ((int)$transferpicklist_autho === 2) || ((int)$department === 18); // 2 = Admin 2
 if (!$_tpl_ig_access) { redirect('/odb/permission.php'); }
 
 // Read-only page: release the PHP session lock now, so a slow request here never makes the

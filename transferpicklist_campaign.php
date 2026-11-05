@@ -4,7 +4,7 @@
 // ACTIVE campaign (outlet keeps that item's stock — it is never picked to SEND it; it can still
 // receive it). Adds / edits / deletes here are written the same way minmax_campaign_list.php
 // writes them (same overlap check, same minmax_campaign_log entry), so both modules stay in step.
-// Super Admin (staff.transferpicklist = 1) only.
+// Super Admin (staff.transferpicklist = 1) and Admin 2 (= 2) — add / edit / delete.
 // ── Timing debug: add ?debug=1 to the URL (admins only) to see how long each step takes ──
 $_tplT0 = microtime(true); $_tplTimes = array(); $_tplLast = $_tplT0;
 function tplT($label) { global $_tplTimes, $_tplLast; $now = microtime(true); $_tplTimes[] = array($label, $now - $_tplLast); $_tplLast = $now; }
@@ -15,7 +15,7 @@ include('../common/index_adv.php');
 require_once(__DIR__ . '/transferpicklist_pager.php');
 if (!isset($conn) || !($conn instanceof mysqli)) { die("Database connection not available."); }
 mysqli_report(MYSQLI_REPORT_OFF);
-if ((int)$transferpicklist_autho !== 1) { redirect('/odb/permission.php'); }
+if ((int)$transferpicklist_autho !== 1 && (int)$transferpicklist_autho !== 2) { redirect('/odb/permission.php'); }
 
 $_chk = $conn->query("SHOW TABLES LIKE 'minmax_campaign'");
 if (!$_chk || $_chk->num_rows === 0) { die('The MinMax campaign table (minmax_campaign) was not found in this database.'); }

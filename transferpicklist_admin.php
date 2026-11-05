@@ -1,5 +1,7 @@
 <?php
-// Admin Settings — grant / remove Transfer Pick List Super Admin (staff.transferpicklist = 1).
+// Admin Settings — set a staff's Transfer Pick List role (staff.transferpicklist):
+//   1 = Super Admin (everything), 2 = Admin 2 (Warehouse Returns, Procurement List,
+//   Exclusions → Campaign only), 0 = none.
 // Super Admin only. Every change is written to transferpicklist_admin_log
 // (see database/migrations/2026-10-29_admin_log.sql — also created here if missing).
 require_once('../lock_adv.php');
@@ -42,44 +44,51 @@ $fDept     = isset($_GET['dept'])  ? (int)$_GET['dept']  : 0;
 $_keepQs   = http_build_query(array_filter(array('q' => $search, 'dept' => $fDept ? $fDept : ''), 'strlen'));
 
 // ── Grant / remove ──
+$_roleNames = array(0 => 'no access', 1 => 'Super Admin', 2 => 'Admin 2');
+// Log action per new role (transferpicklist_admin_log.action)
+$_roleAction = array(1 => 'grant', 2 => 'grant2', 0 => 'remove');
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_admin'], $_POST['staff_id'])) {
-    $sid   = (int)$_POST['staff_id'];
-    $grant = $_POST['set_admin'] === '1';
+    $sid     = (int)$_POST['staff_id'];
+    $newRole = (int)$_POST['set_admin'];
     if (!hash_equals($_token, isset($_POST['token']) ? (string)$_POST['token'] : '')) {
         $msg = 'Your session expired. Please try again.'; $msg_type = 'error';
-    } elseif (!$grant && $sid === $_meId) {
-        $msg = 'You cannot remove your own Super Admin access.'; $msg_type = 'error';
+    } elseif (!isset($_roleNames[$newRole])) {
+        $msg = 'Unknown role.'; $msg_type = 'error';
+    } elseif ($sid === $_meId) {
+        $msg = 'You cannot change your own access.'; $msg_type = 'error';
     } else {
         $row = $conn->query("SELECT id, nama_staff, username, transferpicklist FROM staff WHERE id = $sid AND recycle != 1 LIMIT 1")->fetch_assoc();
         $adminCount = (int)$conn->query("SELECT COUNT(*) c FROM staff WHERE transferpicklist = 1 AND recycle != 1")->fetch_assoc()['c'];
+        $oldRole = $row ? (int)$row['transferpicklist'] : 0;
         if (!$row) {
             $msg = 'Staff not found.'; $msg_type = 'error';
-        } elseif (!$grant && $adminCount <= 1) {
+        } elseif ($oldRole === 1 && $newRole !== 1 && $adminCount <= 1) {
             $msg = 'There must be at least one Super Admin.'; $msg_type = 'error';
-        } elseif (((int)$row['transferpicklist'] === 1) === $grant) {
-            $msg = htmlspecialchars($row['nama_staff']) . ($grant ? ' is already a Super Admin.' : ' is not a Super Admin.'); $msg_type = 'warn';
+        } elseif ($oldRole === $newRole) {
+            $msg = htmlspecialchars($row['nama_staff']) . ' is already ' . ($newRole === 0 ? 'without access' : 'a ' . $_roleNames[$newRole]) . '.'; $msg_type = 'warn';
         } else {
-            $conn->query("UPDATE staff SET transferpicklist = " . ($grant ? 1 : 0) . " WHERE id = $sid LIMIT 1");
+            $conn->query("UPDATE staff SET transferpicklist = $newRole WHERE id = $sid LIMIT 1");
             $conn->query("INSERT INTO transferpicklist_admin_log (staff_id, staff_name, action, by_user, created_at) VALUES ($sid, '"
-                . $conn->real_escape_string($row['nama_staff']) . "', '" . ($grant ? 'grant' : 'remove') . "', '"
+                . $conn->real_escape_string($row['nama_staff']) . "', '" . $_roleAction[$newRole] . "', '"
                 . $conn->real_escape_string($_byName) . "', '" . date('Y-m-d H:i:s') . "')");
-            header('Location: transferpicklist_admin.php?done=' . ($grant ? 'grant' : 'remove') . '&n=' . urlencode($row['nama_staff'])
+            header('Location: transferpicklist_admin.php?done=' . $newRole . '&n=' . urlencode($row['nama_staff'])
                 . ($_keepQs !== '' ? '&' . $_keepQs : ''));
             exit;
         }
     }
 }
 if (isset($_GET['done'], $_GET['n'])) {
-    $msg = '<b>' . htmlspecialchars($_GET['n']) . '</b> ' . ($_GET['done'] === 'grant' ? 'is now a Super Admin.' : 'is no longer a Super Admin.');
+    $_d = (int)$_GET['done'];
+    $msg = '<b>' . htmlspecialchars($_GET['n']) . '</b> ' . ($_d === 0 ? 'no longer has Transfer Pick List admin access.' : 'is now ' . ($_d === 1 ? 'a Super Admin.' : 'an Admin 2.'));
     $msg_type = 'success';
 }
 
 // ── Current Super Admins ──
-$admins = array();
-$res = $conn->query("SELECT s.id, s.nama_staff, s.username, s.status_semasa, d.depart_name
+$admins = array(); $admins2 = array();
+$res = $conn->query("SELECT s.id, s.nama_staff, s.username, s.status_semasa, s.transferpicklist, d.depart_name
                      FROM staff s LEFT JOIN staff_department d ON d.id = s.department
-                     WHERE s.transferpicklist = 1 AND s.recycle != 1 ORDER BY s.nama_staff");
-while ($res && $r = $res->fetch_assoc()) { $admins[] = $r; }
+                     WHERE s.transferpicklist IN (1, 2) AND s.recycle != 1 ORDER BY s.nama_staff");
+while ($res && $r = $res->fetch_assoc()) { if ((int)$r['transferpicklist'] === 1) { $admins[] = $r; } else { $admins2[] = $r; } }
 
 // ── Department dropdown ──
 $deptList = array();
@@ -111,21 +120,25 @@ $logs = array();
 $res = $conn->query("SELECT staff_name, action, by_user, created_at FROM transferpicklist_admin_log ORDER BY id DESC LIMIT 30");
 while ($res && $r = $res->fetch_assoc()) { $logs[] = $r; }
 
-function tplAdminBtn($sid, $grant, $name, $token, $keepQs, $disabledReason = '') {
+// $role: 1 = make Super Admin, 2 = make Admin 2, 0 = remove access
+function tplAdminBtn($sid, $role, $name, $token, $keepQs, $disabledReason = '') {
     if ($disabledReason !== '') {
         echo '<span class="alpro-muted" style="font-size:12px;">' . htmlspecialchars($disabledReason) . '</span>';
         return;
     }
-    $q = $grant
-        ? 'Make ' . $name . ' a Super Admin?\n\nThey will get full access to Transfer Pick List.'
-        : 'Remove Super Admin from ' . $name . '?';
+    $q     = array(
+        1 => 'Make ' . $name . ' a Super Admin?\n\nThey will get full access to Transfer Pick List.',
+        2 => 'Make ' . $name . ' an Admin 2?\n\nThey can use Warehouse Returns, Procurement List and Exclusions \u2192 Campaign only.',
+        0 => 'Remove ' . $name . '\'s Transfer Pick List admin access?',
+    );
+    $label = array(1 => '+ Super Admin', 2 => '+ Admin 2', 0 => 'Remove');
+    $cls   = array(1 => 'tpl-adm-grant', 2 => 'tpl-adm-grant2', 0 => 'tpl-adm-remove');
     echo '<form method="post" action="transferpicklist_admin.php' . ($keepQs !== '' ? '?' . htmlspecialchars($keepQs) : '') . '" style="display:inline;" '
-       . 'onsubmit="return confirm(' . htmlspecialchars(json_encode($q), ENT_QUOTES) . ');">'
+       . 'onsubmit="return confirm(' . htmlspecialchars(json_encode($q[$role]), ENT_QUOTES) . ');">'
        . '<input type="hidden" name="token" value="' . htmlspecialchars($token) . '">'
        . '<input type="hidden" name="staff_id" value="' . (int)$sid . '">'
-       . '<input type="hidden" name="set_admin" value="' . ($grant ? '1' : '0') . '">'
-       . '<button type="submit" class="tpl-adm-btn ' . ($grant ? 'tpl-adm-grant' : 'tpl-adm-remove') . '">'
-       . ($grant ? '+ Make Super Admin' : 'Remove') . '</button></form>';
+       . '<input type="hidden" name="set_admin" value="' . (int)$role . '">'
+       . '<button type="submit" class="tpl-adm-btn ' . $cls[$role] . '">' . $label[$role] . '</button></form> ';
 }
 ?>
 <!DOCTYPE html>
@@ -143,6 +156,9 @@ function tplAdminBtn($sid, $grant, $name, $token, $keepQs, $disabledReason = '')
 .tpl-adm-btn{height:28px;padding:0 12px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;}
 .tpl-adm-grant{background:#2e7d32;border:none;color:#fff;}
 .tpl-adm-grant:hover{background:#1b5e20;}
+.tpl-adm-grant2{background:#1976d2;border:none;color:#fff;}
+.tpl-adm-grant2:hover{background:#0d47a1;}
+.tpl-adm-badge2{display:inline-block;background:#e3f2fd;color:#1565c0;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;}
 .tpl-adm-remove{background:#fff;border:1px solid #e57373;color:#c62828;}
 .tpl-adm-remove:hover{background:#ffebee;}
 .tpl-adm-badge{display:inline-block;background:#e8f5e9;color:#2e7d32;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;}
@@ -172,20 +188,39 @@ function tplAdminBtn($sid, $grant, $name, $token, $keepQs, $disabledReason = '')
 <div class="alpro-box">
     <div class="tpl-adm-title">&#128273; Super Admins <span class="tpl-adm-badge"><?php echo count($admins); ?></span></div>
     <table class="myTable alpro-table" width="100%" cellpadding="6" cellspacing="1" bgcolor="#EFEFEF">
-        <tr><th width="40">No.</th><th>Name</th><th>Department</th><th>Position</th><th width="160">Action</th></tr>
+        <tr><th width="40">No.</th><th>Name</th><th>Department</th><th width="220">Action</th></tr>
         <?php if (empty($admins)): ?>
-        <tr><td colspan="5" class="alpro-muted">No Super Admins.</td></tr>
+        <tr><td colspan="4" class="alpro-muted">No Super Admins.</td></tr>
         <?php endif; ?>
         <?php foreach ($admins as $i => $a): ?>
         <tr>
             <td><?php echo $i + 1; ?></td>
             <td><b><?php echo htmlspecialchars($a['nama_staff']); ?></b><?php echo (int)$a['id'] === $_meId ? ' <span class="alpro-muted" style="font-size:11px;">(you)</span>' : ''; ?></td>
             <td><?php echo htmlspecialchars((string)$a['depart_name']); ?></td>
-            <td><?php echo htmlspecialchars((string)$a['status_semasa']); ?></td>
             <td><?php
                 $why = (int)$a['id'] === $_meId ? 'Can\'t remove yourself' : (count($admins) <= 1 ? 'Last Super Admin' : '');
-                tplAdminBtn($a['id'], false, $a['nama_staff'], $_token, $_keepQs, $why);
+                if ($why === '') { tplAdminBtn($a['id'], 2, $a['nama_staff'], $_token, $_keepQs); }
+                tplAdminBtn($a['id'], 0, $a['nama_staff'], $_token, $_keepQs, $why);
             ?></td>
+        </tr>
+        <?php endforeach; ?>
+    </table>
+</div>
+
+<!-- ADMIN 2 -->
+<div class="alpro-box">
+    <div class="tpl-adm-title">&#128100; Admin 2 <span class="tpl-adm-badge2"><?php echo count($admins2); ?></span> <small>— Warehouse Returns, Procurement List and Exclusions &rarr; Campaign only</small></div>
+    <table class="myTable alpro-table" width="100%" cellpadding="6" cellspacing="1" bgcolor="#EFEFEF">
+        <tr><th width="40">No.</th><th>Name</th><th>Department</th><th width="220">Action</th></tr>
+        <?php if (empty($admins2)): ?>
+        <tr><td colspan="4" class="alpro-muted">No Admin 2 yet — search below to add one.</td></tr>
+        <?php endif; ?>
+        <?php foreach ($admins2 as $i => $a): ?>
+        <tr>
+            <td><?php echo $i + 1; ?></td>
+            <td><b><?php echo htmlspecialchars($a['nama_staff']); ?></b></td>
+            <td><?php echo htmlspecialchars((string)$a['depart_name']); ?></td>
+            <td><?php tplAdminBtn($a['id'], 1, $a['nama_staff'], $_token, $_keepQs); tplAdminBtn($a['id'], 0, $a['nama_staff'], $_token, $_keepQs); ?></td>
         </tr>
         <?php endforeach; ?>
     </table>
@@ -193,7 +228,7 @@ function tplAdminBtn($sid, $grant, $name, $token, $keepQs, $disabledReason = '')
 
 <!-- ADD -->
 <div class="alpro-box">
-    <div class="tpl-adm-title">&#10133; Add a Super Admin <small>— pick a department, or search by name, username or staff ID</small></div>
+    <div class="tpl-adm-title">&#10133; Add an Admin <small>— pick a department, or search by name, username or staff ID</small></div>
     <form method="get" action="transferpicklist_admin.php" class="tpl-adm-search">
         <div class="tpl-adm-f">
             <label>Department</label>
@@ -213,18 +248,19 @@ function tplAdminBtn($sid, $grant, $name, $token, $keepQs, $disabledReason = '')
     </form>
     <?php if ($hasFilter): ?>
     <table class="myTable alpro-table" width="100%" cellpadding="6" cellspacing="1" bgcolor="#EFEFEF">
-        <tr><th>Name</th><th>Department</th><th>Position</th><th width="160">Action</th></tr>
+        <tr><th>Name</th><th>Department</th><th width="220">Action</th></tr>
         <?php if (empty($results)): ?>
-        <tr><td colspan="4" class="alpro-muted">No staff found.</td></tr>
+        <tr><td colspan="3" class="alpro-muted">No staff found.</td></tr>
         <?php endif; ?>
         <?php foreach ($results as $r): ?>
         <tr>
             <td><b><?php echo htmlspecialchars($r['nama_staff']); ?></b></td>
             <td><?php echo htmlspecialchars((string)$r['depart_name']); ?></td>
-            <td><?php echo htmlspecialchars((string)$r['status_semasa']); ?></td>
             <td><?php
-                if ((int)$r['transferpicklist'] === 1) { echo '<span class="tpl-adm-badge">&#10003; Super Admin</span>'; }
-                else { tplAdminBtn($r['id'], true, $r['nama_staff'], $_token, $_keepQs); }
+                $_lv = (int)$r['transferpicklist'];
+                if ($_lv === 1)     { echo '<span class="tpl-adm-badge">&#10003; Super Admin</span>'; }
+                elseif ($_lv === 2) { echo '<span class="tpl-adm-badge2">&#10003; Admin 2</span> '; tplAdminBtn($r['id'], 1, $r['nama_staff'], $_token, $_keepQs); }
+                else                { tplAdminBtn($r['id'], 1, $r['nama_staff'], $_token, $_keepQs); tplAdminBtn($r['id'], 2, $r['nama_staff'], $_token, $_keepQs); }
             ?></td>
         </tr>
         <?php endforeach; ?>
@@ -239,9 +275,13 @@ function tplAdminBtn($sid, $grant, $name, $token, $keepQs, $disabledReason = '')
     <?php if (empty($logs)): ?>
     <div class="alpro-muted" style="font-size:13px;">No changes recorded yet.</div>
     <?php endif; ?>
-    <?php foreach ($logs as $l): $g = $l['action'] === 'grant'; ?>
-    <div style="border-left:3px solid <?php echo $g ? '#2e7d32' : '#c62828'; ?>; padding:3px 0 3px 12px; margin-bottom:8px; text-align:left;">
-        <div style="font-size:13px;"><b><?php echo htmlspecialchars($l['staff_name']); ?></b> <?php echo $g ? 'was made a Super Admin' : 'was removed as Super Admin'; ?></div>
+    <?php foreach ($logs as $l):
+        $_la  = $l['action'];
+        $_lc  = $_la === 'grant' ? '#2e7d32' : ($_la === 'grant2' ? '#1976d2' : '#c62828');
+        $_lt  = $_la === 'grant' ? 'was made a Super Admin' : ($_la === 'grant2' ? 'was made an Admin 2' : 'had admin access removed');
+    ?>
+    <div style="border-left:3px solid <?php echo $_lc; ?>; padding:3px 0 3px 12px; margin-bottom:8px; text-align:left;">
+        <div style="font-size:13px;"><b><?php echo htmlspecialchars($l['staff_name']); ?></b> <?php echo $_lt; ?></div>
         <div style="font-size:11px;color:#888;">by <?php echo htmlspecialchars($l['by_user'] !== '' && $l['by_user'] !== null ? $l['by_user'] : 'Unknown'); ?> &middot; <?php echo date('d M Y, h:i A', strtotime($l['created_at'])); ?></div>
     </div>
     <?php endforeach; ?>

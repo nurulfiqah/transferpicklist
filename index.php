@@ -17,6 +17,7 @@ $_tpl_is_super_admin = (int)$transferpicklist_autho === 1;
 $_tpl_is_admin = (int)$transferpicklist_autho === 1;
 $_tpl_is_proc  = $_tpl_is_admin || ((int)$department === 18);
 // Dashboard: Super Admin (transferpicklist = 1) and Procurement (dept 18) — both see everything
+if (!$_tpl_is_proc && (int)$transferpicklist_autho === 2) { header('Location: transferpicklist_warehouse.php'); exit; } // Admin 2 has no Dashboard
 if (!$_tpl_is_proc) { redirect('/odb/permission.php'); }
 tplT('Login check + database connect (outer app)');
 // Read-only page: release the PHP session lock now, so a slow request here never makes the

@@ -5,7 +5,7 @@ $connect = 1;
 date_default_timezone_set('Asia/Kuala_Lumpur');
 include('../common/index_adv.php');
 if (!isset($conn) || !($conn instanceof mysqli)) { die("Database connection not available."); }
-$_wh_det_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
+$_wh_det_access = ((int)$transferpicklist_autho === 1) || ((int)$transferpicklist_autho === 2) || ((int)$department === 18); // 2 = Admin 2
 if (!$_wh_det_access) { redirect('/odb/permission.php'); }
 
 $picklistNo = isset($_GET['picklist_no']) ? trim($_GET['picklist_no']) : '';

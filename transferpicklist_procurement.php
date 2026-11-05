@@ -17,7 +17,7 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 // normal page issue instead of an uncaught fatal error crashing the export.
 mysqli_report(MYSQLI_REPORT_OFF);
 tplT('Login check + database connect (outer app)');
-$_tpl_proc_access = ((int)$transferpicklist_autho === 1) || ((int)$department === 18);
+$_tpl_proc_access = ((int)$transferpicklist_autho === 1) || ((int)$transferpicklist_autho === 2) || ((int)$department === 18); // 2 = Admin 2
 if (!$_tpl_proc_access) { redirect('/odb/permission.php'); }
 
 // Read-only page: release the PHP session lock now, so a slow request here never makes the

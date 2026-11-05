@@ -5,6 +5,7 @@ $_tpl_dept         = isset($department) ? (int)$department : 0;
 $_tpl_is_super_admin = $_tpl_level === 1;
 $_tpl_is_admin     = $_tpl_level === 1;
 $_tpl_is_proc      = $_tpl_is_admin || ($_tpl_dept === 18);
+$_tpl_is_admin2    = $_tpl_level === 2; // Admin 2: Warehouse Returns, Procurement List, Exclusions → Campaign only
 $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa === 'Area Manager' || $status_semasa === 'Outlet Manager')); // My Outlet Tasks
 ?>
 <style>
@@ -98,7 +99,7 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
         </a>
         <?php endif; ?>
 
-        <?php if ($_tpl_is_proc): ?>
+        <?php if ($_tpl_is_proc || $_tpl_is_admin2): ?>
         <?php
         // Activity Log link: when on Warehouse Returns, open it filtered to the pick list being viewed
         $_wh_log_url = 'transferpicklist_activity_log.php';
@@ -121,7 +122,7 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
         </div>
         <?php endif; ?>
 
-        <?php if ($_tpl_is_proc): ?>
+        <?php if ($_tpl_is_proc || $_tpl_is_admin2): ?>
         <div class="dropdown">
             <button class="alpro-btn <?php echo in_array($current_page, array('transferpicklist_procurement.php', 'transferpicklist_past3months_list.php', 'transferpicklist_itemgrade_list.php')) ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"
                     style="cursor:pointer; display:inline-flex; align-items:center; gap:5px; border:none; outline:none;">
@@ -171,7 +172,7 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
         </a>
         <?php endif; ?>
 
-        <?php if ($_tpl_is_super_admin): ?>
+        <?php if ($_tpl_is_super_admin || $_tpl_is_admin2): ?>
         <div class="dropdown">
             <?php $_excl_pages = array('transferpicklist_outlet_exclusion.php','transferpicklist_excluded.php','transferpicklist_excluded_items.php','transferpicklist_campaign.php'); ?>
             <button class="alpro-btn <?php echo in_array($current_page, $_excl_pages) ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"
@@ -179,9 +180,11 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
                 Exclusions &#9662;
             </button>
             <div class="dropdown-content">
+                <?php if ($_tpl_is_super_admin): ?>
                 <a href="transferpicklist_outlet_exclusion.php">Outlet Exclusion</a>
                 <a href="transferpicklist_excluded_items.php">Excluded Items (Global)</a>
                 <a href="transferpicklist_excluded.php">Excluded Items (Per Outlet)</a>
+                <?php endif; ?>
                 <a href="transferpicklist_campaign.php">Campaign (MinMax)</a>
             </div>
         </div>
