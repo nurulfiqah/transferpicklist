@@ -68,7 +68,7 @@ if (isset($_GET['export'])) {
     ini_set('memory_limit', '512M');
 
     if ($listType === 'slowmoving') {
-        set_time_limit(300);
+        set_time_limit(0);
 
         $where = "1=1"; // NEW-grade items are removed at sync time (see $_newExclude note below)
         if ($filterSearch !== '') {
@@ -82,6 +82,7 @@ if (isset($_GET['export'])) {
         }
         if ($filterTrend !== '') { $where .= " AND s.trend_type = '" . $conn->real_escape_string($filterTrend) . "'"; }
         if ($filterType !== '') { $where .= tplTypeFilterSql('s.item_code', $filterType); }
+        if ($filterOutlet !== '') { $where .= " AND o.code = '" . $conn->real_escape_string($filterOutlet) . "'"; }
         if ($filterPriority !== '') {
             $oc = strtoupper($filterPriority);
             if ($oc === 'SABAH')       { $where .= " AND o.code LIKE 'SKK%'"; }
@@ -99,9 +100,11 @@ if (isset($_GET['export'])) {
 
         header('Content-Type: text/csv');
         header('Content-Disposition: attachment; filename="slowmoving_' . date('Ymd') . '.csv"');
-        if (ob_get_level()) ob_end_clean();
+        header('X-Accel-Buffering: no');
+        while (ob_get_level() > 0) { ob_end_clean(); }
         $out = fopen('php://output', 'w');
         fputcsv($out, array('#', 'Outlet Short Code', 'Outlet Code', 'Outlet Name', 'Item Code', 'Category', 'Type', 'Trend', 'Last Month Closing Stock Qty', 'Avg Past 3M Qty Sold', 'Avg Past 3M MOI', 'Adjusted Overstock Qty', 'Last Sync'));
+        flush(); // download starts now, rows follow
 
         $conn->real_query("
             SELECT o.code as outlet_code, o.acmm_id, o.comp_name as outlet_name,
@@ -148,6 +151,7 @@ if (isset($_GET['export'])) {
             $where .= " AND (" . implode(' OR ', $searchOr) . ")";
         }
         if ($filterType !== '') { $where .= tplTypeFilterSql('n.item_code', $filterType); }
+        if ($filterOutlet !== '') { $where .= " AND o.code = '" . $conn->real_escape_string($filterOutlet) . "'"; }
         if ($filterPriority !== '') {
             $oc = strtoupper($filterPriority);
             if ($oc === 'SABAH')       { $where .= " AND o.code LIKE 'SKK%'"; }
@@ -155,31 +159,37 @@ if (isset($_GET['export'])) {
             elseif ($oc === 'PENINSULAR') { $where .= " AND o.code NOT LIKE 'Q%' AND o.code NOT LIKE 'SKK%'"; }
         }
 
-        // Descriptions/models only for items that are actually in the non moving lists
-        tplLoadSimple($conn, "SELECT item_code FROM transferpicklist_nonmoving"
-            . ($_nmEthicalExists ? " UNION SELECT item_code FROM transferpicklist_nonmoving_ethical" : ""), $item_arr, $model_arr);
-        $exportDesc  = $item_arr;
-        $exportModel = $model_arr;
+        // The export "kept loading" on production: no time limit raised (PHP stopped it midway),
+        // every row buffered in memory, and nothing reached the browser until the very end.
+        // Now: no time limit, rows streamed unbuffered, and the CSV header row is flushed
+        // straight away so the download starts at once.
+        set_time_limit(0);
+        while (ob_get_level() > 0) { ob_end_clean(); }
 
         header('Content-Type: text/csv');
         header('Content-Disposition: attachment; filename="nonmoving_reorder_zero_' . date('Ymd') . '.csv"');
+        header('X-Accel-Buffering: no');
         $out = fopen('php://output', 'w');
         fputcsv($out, array('#', 'Outlet Short Code', 'Outlet Code', 'Outlet Name', 'Item Code', 'Item Description', 'Category', 'Type', 'Priority', 'Closing Stock (Qty)', 'Avg Past 6M Qty Sold', 'MOI', 'Last Sync'));
+        flush();
 
-        // Stream directly — no $allRows array
-        $res = $conn->query("
+        // Description + model joined per row (indexed item_code lookup) instead of loading
+        // them for every item in both non moving tables up front.
+        $conn->real_query("
             SELECT o.code as outlet_code, o.acmm_id, o.comp_name as outlet_name,
                    n.item_code, n.closing_stock, n.timestamp, n.category,
-                   n.avg_monthly
+                   n.avg_monthly, sp.name AS item_name, sp.model AS item_model
             FROM $nmUnion n
             JOIN outlet o ON o.id = n.outlet_id
+            LEFT JOIN simple sp ON sp.item_code = n.item_code
             WHERE $where
             ORDER BY n.avg_monthly DESC, n.outlet_id, n.item_code
         ");
+        $res = $conn->use_result();
         $rowNum = 1;
-        while ($row = $res->fetch_assoc()) {
-            $desc        = isset($exportDesc[$row['item_code']]) ? $exportDesc[$row['item_code']] : '';
-            $typeLabel   = isset($exportModel[$row['item_code']]) && $exportModel[$row['item_code']] === 'Store/HQ Order' ? 'Non-HQ' : 'HQ';
+        while ($res && $row = $res->fetch_assoc()) {
+            $desc        = $row['item_name'] !== null ? $row['item_name'] : '';
+            $typeLabel   = $row['item_model'] === 'Store/HQ Order' ? 'Non-HQ' : 'HQ';
             $acmm        = !empty($row['acmm_id']) ? "'" . str_pad((int)$row['acmm_id'], 4, '0', STR_PAD_LEFT) : '';
             $oc2         = strtoupper($row['outlet_code']);
             $priority    = strpos($oc2, 'SKK') === 0 ? 'Sabah' : (strpos($oc2, 'Q') === 0 ? 'Sarawak' : 'Peninsular');
@@ -187,7 +197,9 @@ if (isset($_GET['export'])) {
             $avgMonthly  = isset($row['avg_monthly']) && $row['avg_monthly'] !== null ? number_format((float)$row['avg_monthly'], 2, '.', '') : '0.00';
             $monthsStock = (float)$avgMonthly > 0 ? number_format((float)$row['closing_stock'] / (float)$avgMonthly, 2) : '0.00';
             fputcsv($out, array($rowNum++, $row['outlet_code'], $acmm, $row['outlet_name'], $row['item_code'], $desc, $categoryLabel, $typeLabel, $priority, $row['closing_stock'], $avgMonthly, $monthsStock, $row['timestamp']));
+            if ($rowNum % 500 === 0) { flush(); }
         }
+        if ($res) { $res->free(); }
         fclose($out);
     }
     exit;
