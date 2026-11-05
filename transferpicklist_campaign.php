@@ -173,49 +173,110 @@ $totalPages = max(1, (int)ceil($totalItems / $perPage));
 $page       = min($page, $totalPages);
 $offset     = ($page - 1) * $perPage;
 
+// Adds to each row: 'by' (who created it), 'src' (Pick List exclusion it came from, or ''),
+// 'desc' (item description). Used by the table AND the Excel export so both always match.
+function tplCampEnrich($conn, &$rows) {
+    // Staff names for real users — looked up with string literals instead of JOINing staff:
+    // staff.username is latin1 and created_by is utf8mb4, so a JOIN can't use the username
+    // index and scans the whole staff table once per row.
+    $staffNames = array(); $users = array();
+    // Rows copied in from a Pick List exclusion carry only a source tag as created_by — the real
+    // person is on the exclusion itself (transferpicklist_excluded / _excluded_items.created_by,
+    // a staff name; only recorded since 2026-10-29, so older exclusions have none).
+    $srcLabels = array(
+        'sync_transferpicklist_excluded_items'    => 'Pick List – Excluded Item (Global)',
+        'migrate_transferpicklist_excluded_items' => 'Pick List – Excluded Item (Global)',
+        'sync_transferpicklist_excluded'          => 'Pick List – Excluded Item (Per Outlet)',
+        'migrate_transferpicklist_excluded'       => 'Pick List – Excluded Item (Per Outlet)',
+    );
+    $exclByPair = array(); $exclByItem = array(); $pairs = array(); $globals = array(); $codes = array();
+    foreach ($rows as $r) {
+        $cb = (string)$r['created_by'];
+        if (isset($srcLabels[$cb])) {
+            if (strpos($cb, '_excluded_items') !== false) { $globals[$r['item_code']] = "'" . $conn->real_escape_string($r['item_code']) . "'"; }
+            else { $pairs[$r['outlet_code'] . '|' . $r['item_code']] = "('" . $conn->real_escape_string($r['outlet_code']) . "','" . $conn->real_escape_string($r['item_code']) . "')"; }
+        } elseif ($cb !== '') {
+            $users[$cb] = "'" . $conn->real_escape_string($cb) . "'";
+        }
+        // Descriptions as string literals too, so simple's (latin1) item_code index is used
+        if ($r['item_code'] !== 'ALL') { $codes[$r['item_code']] = "'" . $conn->real_escape_string($r['item_code']) . "'"; }
+    }
+    foreach (array_chunk($users, 1000) as $ch) {
+        $q = $conn->query("SELECT username, nama_staff FROM staff WHERE username IN (" . implode(',', $ch) . ") AND recycle != 1");
+        while ($q && $x = $q->fetch_assoc()) { $staffNames[$x['username']] = $x['nama_staff']; }
+    }
+    foreach (array_chunk($pairs, 1000) as $ch) {
+        $q = $conn->query("SELECT outlet_code, item_code, created_by FROM transferpicklist_excluded WHERE (outlet_code, item_code) IN (" . implode(',', $ch) . ") AND created_by IS NOT NULL AND created_by != ''");
+        while ($q && $x = $q->fetch_assoc()) { $exclByPair[strtoupper($x['outlet_code']) . '|' . $x['item_code']] = $x['created_by']; }
+    }
+    foreach (array_chunk($globals, 1000) as $ch) {
+        $q = $conn->query("SELECT item_code, created_by FROM transferpicklist_excluded_items WHERE item_code IN (" . implode(',', $ch) . ") AND created_by IS NOT NULL AND created_by != ''");
+        while ($q && $x = $q->fetch_assoc()) { $exclByItem[$x['item_code']] = $x['created_by']; }
+    }
+    $descMap = array();
+    foreach (array_chunk($codes, 1000) as $ch) {
+        $q = $conn->query("SELECT item_code, name FROM simple WHERE item_code IN (" . implode(',', $ch) . ")");
+        while ($q && $x = $q->fetch_assoc()) { $descMap[$x['item_code']] = $x['name']; }
+    }
+    foreach ($rows as &$r) {
+        $cb       = (string)$r['created_by'];
+        $r['src'] = isset($srcLabels[$cb]) ? $srcLabels[$cb] : '';
+        if ($r['src'] !== '') {
+            $who = strpos($cb, '_excluded_items') !== false
+                ? (isset($exclByItem[$r['item_code']]) ? $exclByItem[$r['item_code']] : '')
+                : (isset($exclByPair[strtoupper($r['outlet_code']) . '|' . $r['item_code']]) ? $exclByPair[strtoupper($r['outlet_code']) . '|' . $r['item_code']] : '');
+            $r['by'] = $who !== '' ? $who : 'Not recorded';
+        } else {
+            $r['by'] = isset($staffNames[$cb]) ? $staffNames[$cb] : $cb;
+        }
+        $r['desc'] = $r['item_code'] === 'ALL' ? 'All items' : (isset($descMap[$r['item_code']]) ? $descMap[$r['item_code']] : '');
+    }
+    unset($r);
+}
+
+// ============================================================
+// EXPORT EXCEL — every campaign matching the current filters (all pages)
+// ============================================================
+if (isset($_GET['export'])) {
+    set_time_limit(0);
+    $all = array();
+    $res = $conn->query("SELECT * FROM minmax_campaign WHERE $where ORDER BY start_date DESC, outlet_code, item_code");
+    while ($res && $r = $res->fetch_assoc()) { $all[] = $r; }
+    tplCampEnrich($conn, $all);
+    while (ob_get_level() > 0) { ob_end_clean(); }
+    header('Content-Type: application/vnd.ms-excel');
+    header('Content-Disposition: attachment; filename="Campaign_' . date('Ymd_His') . '.xls"');
+    $x = function ($v) { return htmlspecialchars((string)$v, ENT_XML1 | ENT_QUOTES, 'UTF-8'); };
+    $cell = function ($v) use ($x) { return '<Cell><Data ss:Type="String">' . $x($v) . '</Data></Cell>'; };
+    echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<?mso-application progid=\"Excel.Sheet\"?>\n";
+    echo '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
+       . '<Styles><Style ss:ID="h"><Font ss:Bold="1"/><Interior ss:Color="#EFEFEF" ss:Pattern="Solid"/></Style></Styles>'
+       . '<Worksheet ss:Name="Campaign"><Table>' . "\n<Row>";
+    foreach (array('No.', 'Outlet', 'Item Code', 'Description', 'Start Date', 'End Date', 'Remark', 'Status', 'Created By', 'Source', 'Created At', 'Updated By', 'Updated At') as $h) {
+        echo '<Cell ss:StyleID="h"><Data ss:Type="String">' . $x($h) . '</Data></Cell>';
+    }
+    echo "</Row>\n";
+    $today = date('Y-m-d');
+    foreach ($all as $i => $r) {
+        $status = $today < $r['start_date'] ? 'Upcoming' : ($today > $r['end_date'] ? 'Expired' : 'Active');
+        echo '<Row><Cell><Data ss:Type="Number">' . ($i + 1) . '</Data></Cell>'
+           . $cell($r['outlet_code']) . $cell($r['item_code']) . $cell($r['desc'])
+           . $cell($r['start_date']) . $cell($r['end_date'] === '9999-12-31' ? 'No expiry' : $r['end_date'])
+           . $cell((int)$r['remark'] . ' - ' . (isset($remarkLabels[(int)$r['remark']]) ? $remarkLabels[(int)$r['remark']] : '?'))
+           . $cell($status) . $cell($r['by']) . $cell($r['src'] !== '' ? $r['src'] : 'Manual')
+           . $cell($r['created_at']) . $cell((string)$r['updated_by']) . $cell((string)$r['updated_at'])
+           . "</Row>\n";
+    }
+    echo '</Table></Worksheet></Workbook>';
+    exit;
+}
+
 $rows = array();
 $res  = $conn->query("SELECT * FROM minmax_campaign WHERE $where ORDER BY start_date DESC, outlet_code, item_code LIMIT $perPage OFFSET $offset");
 while ($res && $r = $res->fetch_assoc()) { $rows[] = $r; }
 
-// Staff names for this page's creators. Looked up separately with string literals instead of
-// JOINing staff: staff.username is latin1 and created_by is utf8mb4, so a JOIN can't use the
-// username index and scans the whole staff table once per row.
-$staffNames = array(); $users = array();
-foreach ($rows as $r) { if ((string)$r['created_by'] !== '') { $users[$r['created_by']] = "'" . $conn->real_escape_string($r['created_by']) . "'"; } }
-if ($users) {
-    $uRes = $conn->query("SELECT username, nama_staff FROM staff WHERE username IN (" . implode(',', $users) . ") AND recycle != 1");
-    while ($uRes && $u = $uRes->fetch_assoc()) { $staffNames[$u['username']] = $u['nama_staff']; }
-}
-// Rows copied in from a Pick List exclusion carry only a source tag as created_by — the real
-// person is on the exclusion itself (transferpicklist_excluded / _excluded_items.created_by,
-// a staff name; only recorded since 2026-10-29, so older exclusions have none).
-$exclByPair = array(); $exclByItem = array(); $pairs = array(); $globals = array();
-foreach ($rows as $r) {
-    $cb = (string)$r['created_by'];
-    if ($cb === 'sync_transferpicklist_excluded' || $cb === 'migrate_transferpicklist_excluded') {
-        $pairs[] = "('" . $conn->real_escape_string($r['outlet_code']) . "','" . $conn->real_escape_string($r['item_code']) . "')";
-    } elseif ($cb === 'sync_transferpicklist_excluded_items' || $cb === 'migrate_transferpicklist_excluded_items') {
-        $globals[$r['item_code']] = "'" . $conn->real_escape_string($r['item_code']) . "'";
-    }
-}
-if ($pairs) {
-    $xRes = $conn->query("SELECT outlet_code, item_code, created_by FROM transferpicklist_excluded WHERE (outlet_code, item_code) IN (" . implode(',', array_unique($pairs)) . ") AND created_by IS NOT NULL AND created_by != ''");
-    while ($xRes && $x = $xRes->fetch_assoc()) { $exclByPair[strtoupper($x['outlet_code']) . '|' . $x['item_code']] = $x['created_by']; }
-}
-if ($globals) {
-    $xRes = $conn->query("SELECT item_code, created_by FROM transferpicklist_excluded_items WHERE item_code IN (" . implode(',', $globals) . ") AND created_by IS NOT NULL AND created_by != ''");
-    while ($xRes && $x = $xRes->fetch_assoc()) { $exclByItem[$x['item_code']] = $x['created_by']; }
-}
-tplT('Count + load rows + staff names');
-
-// Descriptions for this page's items only — as string literals so simple's (latin1) index is used
-$descMap = array(); $codes = array();
-foreach ($rows as $r) { if ($r['item_code'] !== 'ALL') { $codes[$r['item_code']] = "'" . $conn->real_escape_string($r['item_code']) . "'"; } }
-if ($codes) {
-    $dRes = $conn->query("SELECT item_code, name FROM simple WHERE item_code IN (" . implode(',', $codes) . ")");
-    while ($dRes && $d = $dRes->fetch_assoc()) { $descMap[$d['item_code']] = $d['name']; }
-}
-tplT('Item descriptions');
+tplCampEnrich($conn, $rows);
+tplT('Created By names + item descriptions');
 
 // Outlet filter dropdown (outlets that have campaigns) + Add form outlet list
 $campOutlets = array();
@@ -319,6 +380,7 @@ tplT('Outlet dropdowns');
             </select></div>
         <input type="submit" value="Search" class="alpro-btn alpro-btn-blue btn">
         <a href="transferpicklist_campaign.php" class="alpro-btn alpro-btn-grey btn">Clear</a>
+        <a href="<?php echo htmlspecialchars($selfUrl . ($keepQs !== '' ? '&' : '?') . 'export=1'); ?>" class="alpro-btn alpro-btn-grey btn">&#8659; Export Excel</a>
         <a href="<?php echo htmlspecialchars($selfUrl . ($keepQs !== '' ? '&' : '?') . 'add=1'); ?>" class="alpro-btn alpro-btn-green btn">+ Add Campaign</a>
     </form>
 
@@ -370,29 +432,15 @@ tplT('Outlet dropdowns');
         <?php foreach ($rows as $i => $r):
             list($_st, $_cls) = tplCampStatus($r, $today);
             $_perm  = $r['end_date'] === '9999-12-31';
-            // Rows copied in from a Pick List exclusion page (tags: ../minmax/minmax_campaign_sync.php)
-            $_tplSrc = array(
-                'sync_transferpicklist_excluded_items'    => 'Pick List – Excluded Item (Global)',
-                'migrate_transferpicklist_excluded_items' => 'Pick List – Excluded Item (Global)',
-                'sync_transferpicklist_excluded'          => 'Pick List – Excluded Item (Per Outlet)',
-                'migrate_transferpicklist_excluded'       => 'Pick List – Excluded Item (Per Outlet)',
-            );
-            $_src   = isset($_tplSrc[(string)$r['created_by']]) ? $_tplSrc[(string)$r['created_by']] : '';
-            if ($_src !== '') {
-                $_isGlobal = strpos((string)$r['created_by'], '_excluded_items') !== false;
-                $_k        = $_isGlobal ? $r['item_code'] : strtoupper($r['outlet_code']) . '|' . $r['item_code'];
-                $_who      = $_isGlobal ? (isset($exclByItem[$_k]) ? $exclByItem[$_k] : '') : (isset($exclByPair[$_k]) ? $exclByPair[$_k] : '');
-                $_by       = $_who !== '' ? $_who : 'Not recorded';
-            } else {
-                $_by = isset($staffNames[$r['created_by']]) ? $staffNames[$r['created_by']] : $r['created_by'];
-            }
+            $_src = $r['src'];
+            $_by  = $r['by'];
         ?>
         <tr>
             <td><input type="checkbox" class="tpl-cp-chk" name="ids[]" value="<?php echo (int)$r['id']; ?>" form="tplCpBulk"></td>
             <td><?php echo $offset + $i + 1; ?></td>
             <td><b><?php echo htmlspecialchars($r['outlet_code']); ?></b></td>
             <td class="alpro-mono"><?php echo htmlspecialchars($r['item_code']); ?></td>
-            <td><?php echo $r['item_code'] === 'ALL' ? '<span class="alpro-muted">All items</span>' : htmlspecialchars(isset($descMap[$r['item_code']]) ? $descMap[$r['item_code']] : ''); ?></td>
+            <td><?php echo $r['item_code'] === 'ALL' ? '<span class="alpro-muted">All items</span>' : htmlspecialchars($r['desc']); ?></td>
             <?php if ($editId === (int)$r['id']): ?>
             <td colspan="3" class="tpl-cp-inline">
                 <form method="post" action="<?php echo htmlspecialchars($selfUrl); ?>" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
