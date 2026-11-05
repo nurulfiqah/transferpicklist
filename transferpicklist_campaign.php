@@ -186,6 +186,26 @@ if ($users) {
     $uRes = $conn->query("SELECT username, nama_staff FROM staff WHERE username IN (" . implode(',', $users) . ") AND recycle != 1");
     while ($uRes && $u = $uRes->fetch_assoc()) { $staffNames[$u['username']] = $u['nama_staff']; }
 }
+// Rows copied in from a Pick List exclusion carry only a source tag as created_by — the real
+// person is on the exclusion itself (transferpicklist_excluded / _excluded_items.created_by,
+// a staff name; only recorded since 2026-10-29, so older exclusions have none).
+$exclByPair = array(); $exclByItem = array(); $pairs = array(); $globals = array();
+foreach ($rows as $r) {
+    $cb = (string)$r['created_by'];
+    if ($cb === 'sync_transferpicklist_excluded' || $cb === 'migrate_transferpicklist_excluded') {
+        $pairs[] = "('" . $conn->real_escape_string($r['outlet_code']) . "','" . $conn->real_escape_string($r['item_code']) . "')";
+    } elseif ($cb === 'sync_transferpicklist_excluded_items' || $cb === 'migrate_transferpicklist_excluded_items') {
+        $globals[$r['item_code']] = "'" . $conn->real_escape_string($r['item_code']) . "'";
+    }
+}
+if ($pairs) {
+    $xRes = $conn->query("SELECT outlet_code, item_code, created_by FROM transferpicklist_excluded WHERE (outlet_code, item_code) IN (" . implode(',', array_unique($pairs)) . ") AND created_by IS NOT NULL AND created_by != ''");
+    while ($xRes && $x = $xRes->fetch_assoc()) { $exclByPair[strtoupper($x['outlet_code']) . '|' . $x['item_code']] = $x['created_by']; }
+}
+if ($globals) {
+    $xRes = $conn->query("SELECT item_code, created_by FROM transferpicklist_excluded_items WHERE item_code IN (" . implode(',', $globals) . ") AND created_by IS NOT NULL AND created_by != ''");
+    while ($xRes && $x = $xRes->fetch_assoc()) { $exclByItem[$x['item_code']] = $x['created_by']; }
+}
 tplT('Count + load rows + staff names');
 
 // Descriptions for this page's items only — as string literals so simple's (latin1) index is used
@@ -357,8 +377,15 @@ tplT('Outlet dropdowns');
                 'sync_transferpicklist_excluded'          => 'Pick List – Excluded Item (Per Outlet)',
                 'migrate_transferpicklist_excluded'       => 'Pick List – Excluded Item (Per Outlet)',
             );
-            $_by    = isset($_tplSrc[(string)$r['created_by']]) ? $_tplSrc[(string)$r['created_by']]
-                    : (isset($staffNames[$r['created_by']]) ? $staffNames[$r['created_by']] : $r['created_by']);
+            $_src   = isset($_tplSrc[(string)$r['created_by']]) ? $_tplSrc[(string)$r['created_by']] : '';
+            if ($_src !== '') {
+                $_isGlobal = strpos((string)$r['created_by'], '_excluded_items') !== false;
+                $_k        = $_isGlobal ? $r['item_code'] : strtoupper($r['outlet_code']) . '|' . $r['item_code'];
+                $_who      = $_isGlobal ? (isset($exclByItem[$_k]) ? $exclByItem[$_k] : '') : (isset($exclByPair[$_k]) ? $exclByPair[$_k] : '');
+                $_by       = $_who !== '' ? $_who : 'Not recorded';
+            } else {
+                $_by = isset($staffNames[$r['created_by']]) ? $staffNames[$r['created_by']] : $r['created_by'];
+            }
         ?>
         <tr>
             <td><input type="checkbox" class="tpl-cp-chk" name="ids[]" value="<?php echo (int)$r['id']; ?>" form="tplCpBulk"></td>
@@ -390,7 +417,8 @@ tplT('Outlet dropdowns');
             <td><?php echo (int)$r['remark'] . ' - ' . htmlspecialchars(isset($remarkLabels[(int)$r['remark']]) ? $remarkLabels[(int)$r['remark']] : '?'); ?></td>
             <?php endif; ?>
             <td><span class="tpl-cp-pill <?php echo $_cls; ?>"><?php echo $_st; ?></span></td>
-            <td><?php echo htmlspecialchars((string)$_by); ?><div class="tpl-cp-src"><?php echo htmlspecialchars(date('d M Y', strtotime($r['created_at']))); ?></div></td>
+            <td><?php echo $_by === 'Not recorded' ? '<span class="alpro-muted">Not recorded</span>' : htmlspecialchars((string)$_by); ?>
+                <div class="tpl-cp-src"><?php echo htmlspecialchars(date('d M Y', strtotime($r['created_at']))); ?><?php echo $_src !== '' ? ' &middot; via ' . htmlspecialchars($_src) : ''; ?></div></td>
             <td style="text-align:center;white-space:nowrap;">
                 <a class="tpl-cp-icon tpl-cp-edit" title="Edit dates / remark" href="<?php echo htmlspecialchars($selfUrl . ($keepQs !== '' ? '&' : '?') . 'edit=' . (int)$r['id']); ?>"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></a>
                 <form method="post" action="<?php echo htmlspecialchars($selfUrl); ?>" style="display:inline;" onsubmit="return confirm('Delete this campaign?\n\nIt is removed from MinMax too.');">
