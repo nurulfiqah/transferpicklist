@@ -173,7 +173,7 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
 
         <?php if ($_tpl_is_super_admin): ?>
         <div class="dropdown">
-            <?php $_excl_pages = array('transferpicklist_outlet_exclusion.php','transferpicklist_excluded.php','transferpicklist_excluded_items.php'); ?>
+            <?php $_excl_pages = array('transferpicklist_outlet_exclusion.php','transferpicklist_excluded.php','transferpicklist_excluded_items.php','transferpicklist_campaign.php'); ?>
             <button class="alpro-btn <?php echo in_array($current_page, $_excl_pages) ? 'alpro-btn-blue' : 'alpro-btn-grey'; ?>"
                     style="cursor:pointer; display:inline-flex; align-items:center; gap:5px; border:none; outline:none;">
                 Exclusions &#9662;
@@ -182,6 +182,7 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa
                 <a href="transferpicklist_outlet_exclusion.php">Outlet Exclusion</a>
                 <a href="transferpicklist_excluded_items.php">Excluded Items (Global)</a>
                 <a href="transferpicklist_excluded.php">Excluded Items (Per Outlet)</a>
+                <a href="transferpicklist_campaign.php">Campaign (MinMax)</a>
             </div>
         </div>
         <?php endif; ?>

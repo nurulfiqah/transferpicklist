@@ -267,7 +267,23 @@ if ($_isAjax && isset($_POST['generate'])) {
     $excludedPairs = array(); // key: "item_code|outlet_code"
     $exRes = $conn->query("SELECT item_code, outlet_code FROM transferpicklist_excluded");
     if ($exRes) { while ($exRow = $exRes->fetch_assoc()) { $excludedPairs[$exRow['item_code'] . '|' . $exRow['outlet_code']] = true; } }
-    genLog('Step 4: Loading supply' . ($ethicalTableExists ? ' (regular + ethical)' : ' (regular only — ethical table not found)') . '. Global exclusions: ' . count($excludedGlobal) . ' item(s). Per-outlet exclusions: ' . count($excludedPairs) . ' pair(s)...');
+
+    // Active MinMax campaigns (minmax_campaign — the same list MinMax uses, also edited from
+    // transferpicklist_campaign.php). Any Remark, dates covering today. A campaign outlet
+    // keeps its stock, so it is never picked to SEND that item; it can still receive it.
+    // Keys: "OUTLET|ITEM", "ALL|ITEM" (item at every outlet), "OUTLET|ALL" (every item at
+    // that outlet), "ALL|ALL" (everything).
+    $campaignKeys = array();
+    $chkCamp = $conn->query("SHOW TABLES LIKE 'minmax_campaign'");
+    if ($chkCamp && $chkCamp->num_rows > 0) {
+        $cpRes = $conn->query("SELECT outlet_code, item_code FROM minmax_campaign WHERE CURDATE() BETWEEN start_date AND end_date");
+        while ($cpRes && $cp = $cpRes->fetch_assoc()) {
+            $campaignKeys[strtoupper(trim($cp['outlet_code'])) . '|' . trim($cp['item_code'])] = true;
+        }
+    }
+    if (isset($campaignKeys['ALL|ALL'])) { genLog('WARNING: an active campaign covers ALL outlets + ALL items — every item is excluded from sending.'); }
+    $campaignSkipped = 0;
+    genLog('Step 4: Loading supply' . ($ethicalTableExists ? ' (regular + ethical)' : ' (regular only — ethical table not found)') . '. Global exclusions: ' . count($excludedGlobal) . ' item(s). Per-outlet exclusions: ' . count($excludedPairs) . ' pair(s). Active campaigns: ' . count($campaignKeys) . '...');
 
     $ethicalUnion = $ethicalTableExists ? "
         UNION ALL
@@ -303,6 +319,15 @@ if ($_isAjax && isset($_POST['generate'])) {
         if (isset($excludedGlobal[$row['item_code']])) { continue; }
         // Skip per-outlet excluded pairs
         if (isset($excludedPairs[$row['item_code'] . '|' . $oCode])) { continue; }
+        // Skip items on an active MinMax campaign at this outlet (outlet keeps the stock)
+        if ($campaignKeys) {
+            $_oc = strtoupper($oCode);
+            if (isset($campaignKeys[$_oc . '|' . $row['item_code']]) || isset($campaignKeys['ALL|' . $row['item_code']])
+                || isset($campaignKeys[$_oc . '|ALL']) || isset($campaignKeys['ALL|ALL'])) {
+                $campaignSkipped++;
+                continue;
+            }
+        }
         $supply[$row['item_code']][] = array(
             'outlet_id' => (int)$row['outlet_id'],
             'qty'       => (float)$row['transferable_qty'],
@@ -311,7 +336,7 @@ if ($_isAjax && isset($_POST['generate'])) {
             $ethicalSupplyItems[$row['item_code']] = true;
         }
     }
-    genLog('Step 4: Supply loaded — ' . count($supply) . ' unique item codes (' . count($ethicalSupplyItems) . ' ethical). Total sender entries: ' . array_sum(array_map('count', $supply)) . '.');
+    genLog('Step 4: Supply loaded — ' . count($supply) . ' unique item codes (' . count($ethicalSupplyItems) . ' ethical). Total sender entries: ' . array_sum(array_map('count', $supply)) . '. Skipped by campaign: ' . $campaignSkipped . '.');
 
     // 5. Load demand: avg 3M sales > on-hand qty (load demand sekali)🌷
     // Outlets excluded from receiving transfers (by acmm_id)
