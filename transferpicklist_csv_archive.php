@@ -27,6 +27,10 @@ $dashLabels = array(
     'slowmoving'         => 'Slow Moving',
     'slowmoving_ethical' => 'Slow Moving Ethical',
     'past3months'        => 'Past 3 Months',
+    // Saved by the MinMax syncs (../minmax/minmax_delist_sync.php / minmax_discontinue_sync.php)
+    // through hyper/csv_archive.php — one whole-list file per sync, not per outlet
+    'delist'             => 'Delist (MinMax)',
+    'discontinue'        => 'Discontinue (MinMax)',
 );
 
 // ── Input (strictly validated — names only, never paths) ──────────────
