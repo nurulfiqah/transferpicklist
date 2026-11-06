@@ -402,6 +402,19 @@ if ($_isAjax && isset($_POST['generate'])) {
 
     genLog('Step 6: Non-HQ items loaded: ' . count($nonHqItems) . ' (including ' . count($ethicalSupplyItems) . ' ethical).');
 
+    // 6b. Delist / Discontinue items (MinMax: minmax_sku_exclusion, synced from Procurement's
+    // Tableau "Delist & Discontinue Master List"). They still move outlet → outlet (Pass 1 same
+    // Area Manager, Pass 2 same region), but are NEVER returned to the warehouse — whatever is
+    // left stays at the outlet as "maintain", like Non-HQ items. (MinMax sets them to 0/0.)
+    $delistDiscItems = array();
+    $chkDd = $conn->query("SHOW TABLES LIKE 'minmax_sku_exclusion'");
+    if ($chkDd && $chkDd->num_rows > 0) {
+        $ddRes = $conn->query("SELECT DISTINCT item_code FROM minmax_sku_exclusion WHERE source IN ('delist', 'discontinue')");
+        while ($ddRes && $dd = $ddRes->fetch_assoc()) { $delistDiscItems[trim($dd['item_code'])] = true; }
+    }
+    $delistKeptAtOutlet = 0;
+    genLog('Step 6b: Delist / Discontinue items loaded: ' . count($delistDiscItems) . ' (no warehouse return for these).');
+
     // 7. Distribution
     $item_count_p1 = 0;
     $item_count_p2 = 0;
@@ -499,9 +512,11 @@ if ($_isAjax && isset($_POST['generate'])) {
                 }
             }
 
-            // PASS 3 — WAREHOUSE (HQ items only) or MAINTAIN (Non-HQ items — record for outlet visibility)
+            // PASS 3 — WAREHOUSE (HQ items only) or MAINTAIN (Non-HQ, ethical and Delist / Discontinue
+            // items — record for outlet visibility; they are never returned to the warehouse)
             if ($available > 0) {
-                if (!isset($nonHqItems[$itemCode])) {
+                if (isset($delistDiscItems[$itemCode]) && !isset($nonHqItems[$itemCode])) { $delistKeptAtOutlet++; }
+                if (!isset($nonHqItems[$itemCode]) && !isset($delistDiscItems[$itemCode])) {
                     $whId = isset($regionalWarehouse[$senderRegion]) ? $regionalWarehouse[$senderRegion] : null;
                     if ($whId && $senderOutlet !== $whId) {
                         $priorityType = 'warehouse';
@@ -533,7 +548,7 @@ if ($_isAjax && isset($_POST['generate'])) {
     $conn->commit();
     $conn->autocommit(true);
 
-    genLog('Step 7 done. Outlet items: ' . $item_count_p1 . ' | Warehouse items: ' . $item_count_p2 . '.');
+    genLog('Step 7 done. Outlet items: ' . $item_count_p1 . ' | Warehouse items: ' . $item_count_p2 . '. Delist / Discontinue kept at outlet instead of warehouse: ' . $delistKeptAtOutlet . '.');
 
     // Log both phases
     $logStmt = $conn->prepare("INSERT INTO transferpicklist_log (picklist_id, action, by_user, timestamp) VALUES (?,?,?,?)");

@@ -71,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_admin'], $_POST['
                 . $conn->real_escape_string($_byName) . "', '" . date('Y-m-d H:i:s') . "')");
             // Changed your OWN access away from Super Admin: this page is no longer yours — go to
             // the module start page (Admin 2 lands on Warehouse Returns; no access → permission page).
-            if ($sid === $_meId && $newRole !== 1) { header('Location: index.php'); exit; }
+            if ($sid === $_meId && $newRole !== 1) { redirect('/odb/transferpicklist/index.php'); }
             header('Location: transferpicklist_admin.php?done=' . $newRole . '&n=' . urlencode($row['nama_staff'])
                 . ($_keepQs !== '' ? '&' . $_keepQs : ''));
             exit;
