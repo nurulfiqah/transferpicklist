@@ -6,7 +6,10 @@ $_tpl_is_super_admin = $_tpl_level === 1;
 $_tpl_is_admin     = $_tpl_level === 1;
 $_tpl_is_proc      = $_tpl_is_admin || ($_tpl_dept === 18);
 $_tpl_is_admin2    = $_tpl_level === 2; // Admin 2: Warehouse Returns, Procurement List, Exclusions → Campaign only
-$_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && ($status_semasa === 'Area Manager' || $status_semasa === 'Outlet Manager')); // My Outlet Tasks
+// My Outlet Tasks button: same positions as the page's own check in transferpicklist_outlet.php — keep both lists in step
+$_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && in_array($status_semasa, array(
+    'Area Manager', 'Associate Area Manager', 'Branch Manager', 'Assistant Branch Manager', 'Pharmacist In Charge (PhIC)', 'Pharmacist Manager', 'Operation Efficiency Manager', 'Supervisor', 'Senior Supervisor', 'Junior Supervisor', 'Supervisor (PSH)', 'Pharmacist On Duty (PhOD)', 'Pharmacist On Duty (PHOD)', 'Pharmacist On Duty (Resident)', 'Pharmacist On Duty (Resident) PSH', 'Pharmacy Assistant Grade I', 'Pharmacy Assistant Grade II',
+), true));
 ?>
 <style>
     .dropdown {
