@@ -11,8 +11,14 @@ require_once(__DIR__ . '/transferpicklist_route_filter.php');
 if (!isset($conn) || !($conn instanceof mysqli)) {
     die("Database connection not available.");
 }
-// My Outlet Tasks: Super Admin (all outlets) + Area / Outlet Managers (only the outlets in their staff.outlet)
-$_tpl_outlet_access = ((int)$transferpicklist_autho === 1) || (isset($status_semasa) && ($status_semasa === 'Area Manager' || $status_semasa === 'Outlet Manager'));
+// My Outlet Tasks: Super Admin (all outlets) + Area / Branch Managers (only the outlets in their staff.outlet).
+// Pharmacist In Charge (PhIC), Pharmacist Manager, Operation Efficiency Manager (OEM), Associate Area Manager, Supervisors, Pharmacists On Duty and Pharmacy Assistants are outlet-manager level.
+$_tpl_outlet_access = ((int)$transferpicklist_autho === 1) || (isset($status_semasa) && in_array($status_semasa, array(
+    'Area Manager', 'Associate Area Manager', 'Branch Manager', 'Assistant Branch Manager', 'Pharmacist In Charge (PhIC)', 'Pharmacist Manager', 'Operation Efficiency Manager',
+    'Supervisor', 'Senior Supervisor', 'Junior Supervisor', 'Supervisor (PSH)',
+    'Pharmacist On Duty (PhOD)', 'Pharmacist On Duty (PHOD)', 'Pharmacist On Duty (Resident)', 'Pharmacist On Duty (Resident) PSH',
+    'Pharmacy Assistant Grade I', 'Pharmacy Assistant Grade II',
+), true));
 if (!$_tpl_outlet_access) { redirect('/odb/permission.php'); }
 tplT('Login check + database connect (outer app)');
 // This page never writes to $_SESSION, so release the PHP session lock now — a slow request
@@ -99,7 +105,7 @@ if ($_is_admin_tpl) {
     }
 }
 
-// Area / Outlet Manager with more than one outlet: dropdown of ONLY their own outlets.
+// Area / Branch Manager with more than one outlet: dropdown of ONLY their own outlets.
 // A filter_outlet value that isn't one of their outlets is ignored.
 $mgrOutletList = array();
 if (!$_is_admin_tpl && count($myOutletIds) > 1) {
