@@ -40,16 +40,16 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && in_array($statu
     .dropdown-content a:hover { background-color: #f9f9f9; color: #2980b9; }
     .dropdown:hover .dropdown-content { display: block; }
     /* Flat text tabs, same design as the ATEM / OKR menu (atem/css/style.css .atem-nav) */
-    .tpl-nav-box { padding: 8px 16px !important; border: none !important; border-radius: 8px !important; box-shadow: 0 2px 10px rgba(19, 92, 170, .1) !important; }
+    .tpl-nav-box { padding: 5px 12px !important; border: none !important; border-radius: 8px !important; box-shadow: 0 2px 10px rgba(19, 92, 170, .1) !important; }
     .tpl-nav .alpro-btn {
-        height: 38px; padding: 0 16px; font-size: 14px; font-weight: 500; line-height: 1;
+        height: 30px; padding: 0 10px; font-size: 13px; font-weight: 500; line-height: 1;
         display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; border-radius: 6px;
         background: transparent; color: #6c757d; border: none; box-shadow: none; transform: none;
         font-family: "Inter", "Segoe UI", sans-serif; transition: all .2s ease;
     }
     .tpl-nav .alpro-btn:hover { color: #0d6efd; background: rgba(13, 110, 253, .1); box-shadow: none; transform: none; }
     .tpl-nav .alpro-btn.alpro-btn-blue { color: #0d6efd; background: rgba(13, 110, 253, .1); font-weight: 600; }
-    .tpl-nav-title { margin-right: 10px; color: #2c3e50; font-size: 15px; }
+    .tpl-nav-title { margin-right: 6px; color: #2c3e50; font-size: 14px; }
     /* Smaller gap under the blue page header (page.css gives it 18px) — this module only */
     body .header { margin-bottom: 8px !important; }
 
@@ -89,7 +89,7 @@ $_tpl_has_access   = $_tpl_is_admin || (isset($status_semasa) && in_array($statu
 </style>
 
 <div class="alpro-box tpl-nav-box" style="margin-bottom:10px; background:#fff; overflow:visible;">
-    <div class="alpro-actions tpl-nav" style="margin-bottom:0; display:flex; align-items:center; flex-wrap:wrap; gap:8px; overflow:visible;">
+    <div class="alpro-actions tpl-nav" style="margin-bottom:0; display:flex; align-items:center; flex-wrap:wrap; gap:4px; overflow:visible;">
 
         <strong class="tpl-nav-title">Transfer Pick List</strong>
 
