@@ -50,6 +50,14 @@ $filterOfficer    = isset($_GET['officer'])     ? trim($_GET['officer'])     : '
 $filterModel      = isset($_GET['model'])       ? trim($_GET['model'])       : '';
 $filterReturn     = isset($_GET['hq_return'])   ? trim($_GET['hq_return'])   : '';
 $filterOwnership  = isset($_GET['ownership'])   ? trim($_GET['ownership'])   : '';
+// Category (simple.category_) — several can be ticked: one Procurement executive now covers
+// several categories and wants to see just theirs. ?category[]=SKIN CARE&category[]=NURSING
+$filterCategories = array();
+foreach ((array)(isset($_GET['category']) ? $_GET['category'] : array()) as $_c) {
+    $_c = trim((string)$_c);
+    if ($_c !== '') { $filterCategories[$_c] = true; }
+}
+$filterCategories = array_keys($filterCategories);
 $filterConfirm    = isset($_GET['confirm'])     ? trim($_GET['confirm'])     : '';
 
 // NOTE: Column existence checks removed — columns (is_active, recycle) already exist in production.
@@ -535,16 +543,20 @@ $staffNameMap  = array();
 $modelList     = array();
 $returnList    = array();
 $ownershipList = array();
+$categoryList  = array(); // every category in the pick list
+$catByOfficer  = array(); // officer code => categories of that officer's items in the pick list
 $_optCacheFile = $filterPicklistId > 0 ? __DIR__ . '/logs/wh_opts_' . $filterPicklistId . '.json' : '';
 $_optCache     = null;
 if ($_optCacheFile !== '' && is_file($_optCacheFile) && filemtime($_optCacheFile) > time() - 6 * 3600) {
     $_optCache = json_decode((string)@file_get_contents($_optCacheFile), true);
 }
-if (is_array($_optCache) && isset($_optCache['officer'], $_optCache['model'], $_optCache['return'], $_optCache['ownership'])) {
+if (is_array($_optCache) && isset($_optCache['officer'], $_optCache['model'], $_optCache['return'], $_optCache['ownership'], $_optCache['category'], $_optCache['catByOfficer'])) {
     $officerList   = $_optCache['officer'];
     $modelList     = $_optCache['model'];
     $returnList    = $_optCache['return'];
     $ownershipList = $_optCache['ownership'];
+    $categoryList  = $_optCache['category'];
+    $catByOfficer  = $_optCache['catByOfficer'];
     tplT('P.Officer / Model / Return / Ownership dropdowns (from 6-hour cache)');
 } else {
 // Officer dropdown — Step 1: get distinct item_codes from transferpicklist_item (fast, indexed)
@@ -560,15 +572,19 @@ tplT('Item codes in this pick list');
 // Step 2: P.Officer / Model / Return / Ownership dropdown options — ONE pass over simple
 // for this pick list's item codes (was 4 separate lookups with the same long IN list).
 if (!empty($_icCodes)) {
-    $_optSets = array('procurement_officer' => array(), 'model' => array(), 'hq_return_policy' => array(), 'product_ownership' => array());
-    $optRes = $conn->query("SELECT DISTINCT procurement_officer, model, hq_return_policy, product_ownership FROM simple WHERE item_code IN (" . implode(',', $_icCodes) . ")");
+    $_optSets = array('procurement_officer' => array(), 'model' => array(), 'hq_return_policy' => array(), 'product_ownership' => array(), 'category_' => array());
+    $optRes = $conn->query("SELECT DISTINCT procurement_officer, model, hq_return_policy, product_ownership, category_ FROM simple WHERE item_code IN (" . implode(',', $_icCodes) . ")");
     if ($optRes) {
         while ($r = $optRes->fetch_assoc()) {
             foreach ($_optSets as $_col => $_set) {
                 if ($r[$_col] !== null && $r[$_col] !== '') { $_optSets[$_col][$r[$_col]] = true; }
             }
+            if ((string)$r['procurement_officer'] !== '' && (string)$r['category_'] !== '') {
+                $catByOfficer[(string)$r['procurement_officer']][(string)$r['category_']] = true;
+            }
         }
     }
+    foreach ($catByOfficer as $_of => $_cs) { $_cs = array_map('strval', array_keys($_cs)); usort($_cs, 'strcasecmp'); $catByOfficer[$_of] = $_cs; }
     // Same order the old ORDER BY gave (case-insensitive A–Z). array_keys() turns numeric-looking
     // values (e.g. officer code "12345678") into ints — cast back to string so the dropdown's
     // `=== $filterOfficer` "selected" check still matches.
@@ -577,11 +593,13 @@ if (!empty($_icCodes)) {
     $modelList     = $_optSets['model'];
     $returnList    = $_optSets['hq_return_policy'];
     $ownershipList = $_optSets['product_ownership'];
+    $categoryList  = $_optSets['category_'];
 }
 tplT('P.Officer / Model / Return / Ownership dropdowns (1 item master lookup)');
 if ($_optCacheFile !== '' && !empty($_icCodes) && is_dir(__DIR__ . '/logs')) {
     @file_put_contents($_optCacheFile, json_encode(array(
         'officer' => $officerList, 'model' => $modelList, 'return' => $returnList, 'ownership' => $ownershipList,
+        'category' => $categoryList, 'catByOfficer' => $catByOfficer,
     )), LOCK_EX);
 }
 }
@@ -679,6 +697,13 @@ if ($filterOwnership !== '') {
     if ($owIcRes) { while ($r = $owIcRes->fetch_assoc()) { $owCodes[] = "'" . $conn->real_escape_string($r['item_code']) . "'"; } }
     $whereClauses[] = !empty($owCodes) ? "i.item_code IN (" . implode(',', $owCodes) . ")" : "1=0";
 }
+if (!empty($filterCategories)) {
+    $catIn   = implode(',', array_map(function ($c) use ($conn) { return "'" . $conn->real_escape_string($c) . "'"; }, $filterCategories));
+    $ctIcRes = $conn->query("SELECT DISTINCT item_code FROM simple WHERE category_ IN ($catIn)");
+    $ctCodes = array();
+    if ($ctIcRes) { while ($r = $ctIcRes->fetch_assoc()) { $ctCodes[] = "'" . $conn->real_escape_string($r['item_code']) . "'"; } }
+    $whereClauses[] = !empty($ctCodes) ? "i.item_code IN (" . implode(',', $ctCodes) . ")" : "1=0";
+}
 if ($filterConfirm !== '') { $whereClauses[] = "i.return_confirmed = " . ($filterConfirm === '1' ? '1' : '0'); }
 $whereStr = implode(' AND ', $whereClauses);
 $_plJoin  = $needPicklistJoin ? "JOIN transferpicklist_picklist p ON p.id = i.picklist_id" : "";
@@ -700,7 +725,8 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'confirm_filtered') {
     $rowsChanged = $conn->affected_rows;
     $filterDesc  = array();
     foreach (array('outlet' => $filterOutlet, 'officer' => $filterOfficer, 'model' => $filterModel, 'return' => $filterReturn,
-                   'ownership' => $filterOwnership, 'status' => $filterStatus, 'search' => $filterSearch, 'confirm' => $filterConfirm) as $_k => $_v) {
+                   'ownership' => $filterOwnership, 'category' => implode(' / ', $filterCategories),
+                   'status' => $filterStatus, 'search' => $filterSearch, 'confirm' => $filterConfirm) as $_k => $_v) {
         if ($_v !== '') { $filterDesc[] = "$_k=$_v"; }
     }
     logWhAction($conn, $filterPicklistId, ($state ? 'Confirmed' : 'Unconfirmed') . " return-to-warehouse for ALL $items item(s) in filter"
@@ -717,7 +743,7 @@ if (isset($_GET['export'])) {
                p.picklist_no,
                o.code as from_code, o.acmm_id as from_acmm,
                wh.code as wh_code,
-               s.name as item_name, s.model, s.hq_return_policy, s.product_ownership, s.procurement_officer
+               s.name as item_name, s.model, s.hq_return_policy, s.product_ownership, s.procurement_officer, s.category_
         FROM transferpicklist_item i
         JOIN transferpicklist_picklist p ON p.id = i.picklist_id
         LEFT JOIN outlet o  ON o.id  = i.from_outlet_id
@@ -729,13 +755,14 @@ if (isset($_GET['export'])) {
     header('Content-Type: text/csv');
     header('Content-Disposition: attachment; filename="warehouse_returns_' . date('Ymd') . '.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, array('#','Pick List','From Outlet','Warehouse','Item Code','Description','Model','HQ Return Policy','Product Ownership','Procurement Officer','Qty','Status'));
+    fputcsv($out, array('#','Pick List','From Outlet','Warehouse','Item Code','Description','Category','Model','HQ Return Policy','Product Ownership','Procurement Officer','Qty','Status'));
     $i = 1;
     while ($r = $expRes->fetch_assoc()) {
         fputcsv($out, array(
             $i++, $r['picklist_no'], $r['from_code'], $r['wh_code'],
             $r['item_code'],
             $r['item_name'] ? $r['item_name'] : '',
+            $r['category_'] ? $r['category_'] : '',
             $r['model'] ? $r['model'] : '',
             $r['hq_return_policy'] ? $r['hq_return_policy'] : '',
             $r['product_ownership'] ? $r['product_ownership'] : '',
@@ -856,6 +883,7 @@ if ($filterOfficer   !== '') { $currentParams['officer']     = $filterOfficer; }
 if ($filterModel     !== '') { $currentParams['model']       = $filterModel; }
 if ($filterReturn    !== '') { $currentParams['hq_return']   = $filterReturn; }
 if ($filterOwnership !== '') { $currentParams['ownership']   = $filterOwnership; }
+if (!empty($filterCategories)) { $currentParams['category']  = $filterCategories; }
 if ($filterConfirm   !== '') { $currentParams['confirm']     = $filterConfirm; }
 if ($filterSearch    !== '') { $currentParams['search']      = $filterSearch; }
 ?>
@@ -882,6 +910,18 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
 .filter-bar { display:flex; gap:6px; align-items:flex-end; flex-wrap:wrap; margin-bottom:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px 10px; }
 .filter-bar label { display:block; font-size:11px; color:#888; margin-bottom:2px; white-space:nowrap; }
 .filter-bar select, .filter-bar input[type=text] { padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px; height:32px; box-sizing:border-box; }
+/* Category: tick-box dropdown (several categories at once) */
+.wh-cat-dd { position:relative; }
+.wh-cat-dd summary { list-style:none; width:150px; height:28px; line-height:26px; padding:0 22px 0 8px; border:1px solid #ccc; border-radius:4px; background:#fff; font-size:12px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-sizing:border-box; position:relative; }
+.wh-cat-dd summary::-webkit-details-marker { display:none; }
+.wh-cat-dd summary::after { content:'\25BE'; position:absolute; right:7px; top:0; color:#555; }
+.wh-cat-menu { position:absolute; z-index:1000; top:30px; left:0; width:250px; background:#fff; border:1px solid #ccc; border-radius:6px; box-shadow:0 6px 16px rgba(0,0,0,.12); padding:6px; }
+.wh-cat-menu .wh-cat-find { width:100% !important; margin-bottom:4px; }
+.wh-cat-list { max-height:240px; overflow-y:auto; }
+body .filter-bar label.wh-cat-opt { display:flex !important; align-items:center; gap:6px; font-size:12px !important; color:#222; padding:3px 4px; margin:0 !important; cursor:pointer; white-space:normal; text-align:left; }
+.wh-cat-opt:hover { background:#f2f6fc; }
+.wh-cat-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:6px; border-top:1px solid #eee; padding-top:6px; }
+.wh-cat-none { font-size:12px; color:#999; padding:4px; }
 .pagination { margin-top:12px; display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
 .pagination a, .pagination span { padding:4px 10px; border:1px solid #ddd; border-radius:4px; font-size:12px; text-decoration:none; color:#333; }
 .pagination a:hover { background:#eaf0fb; }
@@ -960,6 +1000,38 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
                     </option>
                     <?php endforeach; ?>
                 </select>
+            </div>
+            <div>
+                <?php
+                // Categories offered: the selected officer's own categories, else all in this pick list.
+                // Ticked ones always stay listed so they can be unticked.
+                $_catOpts = ($filterOfficer !== '' && isset($catByOfficer[$filterOfficer])) ? $catByOfficer[$filterOfficer] : $categoryList;
+                foreach ($filterCategories as $_fc) { if (!in_array($_fc, $_catOpts, true)) { $_catOpts[] = $_fc; } }
+                $_catLabel = empty($filterCategories) ? '-- All --'
+                    : (count($filterCategories) === 1 ? $filterCategories[0] : count($filterCategories) . ' categories');
+                ?>
+                <label>Category</label>
+                <details class="wh-cat-dd">
+                    <summary title="<?php echo htmlspecialchars(implode(', ', $filterCategories)); ?>"><?php echo htmlspecialchars($_catLabel); ?></summary>
+                    <div class="wh-cat-menu">
+                        <?php if (empty($_catOpts)): ?>
+                        <div class="wh-cat-none">No categories</div>
+                        <?php else: ?>
+                        <input type="text" class="wh-cat-find" placeholder="Find category..." data-no-autofilter
+                               oninput="var q=this.value.toLowerCase();this.parentNode.querySelectorAll('label.wh-cat-opt').forEach(function(l){l.style.display=l.textContent.toLowerCase().indexOf(q)>-1?'':'none';});">
+                        <div class="wh-cat-list">
+                            <?php foreach ($_catOpts as $_co): ?>
+                            <label class="wh-cat-opt"><input type="checkbox" name="category[]" value="<?php echo htmlspecialchars($_co); ?>" data-no-autofilter
+                                <?php echo in_array($_co, $filterCategories, true) ? 'checked' : ''; ?>> <?php echo htmlspecialchars($_co); ?></label>
+                            <?php endforeach; ?>
+                        </div>
+                        <div class="wh-cat-actions">
+                            <button type="button" class="alpro-btn alpro-btn-grey" onclick="this.closest('.wh-cat-menu').querySelectorAll('input[type=checkbox]').forEach(function(c){c.checked=false;});">Clear</button>
+                            <button type="submit" class="alpro-btn alpro-btn-blue">Apply</button>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </details>
             </div>
             <div>
                 <label>Confirm Return</label>
