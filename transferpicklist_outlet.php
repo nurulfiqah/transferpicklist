@@ -39,6 +39,24 @@ tplT('Column checks');
 $_confirmBy  = $conn->real_escape_string(isset($nama_staff) && $nama_staff !== '' ? $nama_staff : (isset($_SESSION['myusername']) ? $_SESSION['myusername'] : ''));
 $_confirmSet = "confirmed_by = '$_confirmBy', confirmed_at = NOW()";
 
+// Runs a write query, retrying up to 3 times on a deadlock (1213) or lock wait timeout (1205) —
+// both happen when two people confirm at the same moment and simply succeed on a retry.
+// Returns the query result, or false if it still failed (never a fatal error page).
+function tplQueryRetry($conn, $sql) {
+    for ($try = 1; $try <= 3; $try++) {
+        try {
+            $res = $conn->query($sql);
+            if ($res !== false) { return $res; }
+            $errno = $conn->errno;
+        } catch (mysqli_sql_exception $e) {
+            $errno = $e->getCode();
+        }
+        if ($errno !== 1213 && $errno !== 1205) { return false; }
+        usleep(200000 * $try); // 0.2s, 0.4s
+    }
+    return false;
+}
+
 $msg      = '';
 $msg_type = '';
 $view     = (isset($_GET['view']) && $_GET['view'] === 'incoming') ? 'incoming' : 'outgoing';
@@ -168,10 +186,10 @@ if (!empty($myOutletIds)) {
                     if ($qtyActual < 1)       { $qtyActual = 1; }
                     if ($qtyActual > $maxQty) { $qtyActual = $maxQty; }
                     $safeQty = number_format($qtyActual, 2, '.', '');
-                    $res = $conn->query("UPDATE transferpicklist_item SET status='transferred', qty_actual=$safeQty, $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
+                    $res = tplQueryRetry($conn, "UPDATE transferpicklist_item SET status='transferred', qty_actual=$safeQty, $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
                     if (!$res) {
                         // qty_actual column may not exist yet — update status only
-                        $conn->query("UPDATE transferpicklist_item SET status='transferred', $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
+                        tplQueryRetry($conn, "UPDATE transferpicklist_item SET status='transferred', $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
                     }
                     $confirmed++;
                 }
@@ -222,17 +240,33 @@ if (!empty($myOutletIds)) {
             }
             $caWhereStr = implode(' AND ', $caWhere);
 
-            $conn->query("
-                UPDATE transferpicklist_item i
+            // Two steps, so only THIS outlet's rows are locked. One big UPDATE ... JOIN ... WHERE
+            // status = 'pending' locked wide index ranges (other outlets' rows too), so two managers
+            // pressing Confirm All at the same time deadlocked ("Deadlock found when trying to get lock").
+            //  1) find the ids with a plain read (no locks);
+            //  2) update them by primary key, 500 at a time — status = 'pending' re-checked so a row
+            //     confirmed meanwhile by someone else is not touched twice.
+            $caIds = array();
+            $idRes = $conn->query("
+                SELECT i.id
+                FROM transferpicklist_item i
                 JOIN transferpicklist_picklist p ON p.id = i.picklist_id AND p.status = 'published'
-                SET i.status = 'transferred', i.confirmed_by = '$_confirmBy', i.confirmed_at = NOW()
                 WHERE $caWhereStr AND i.recycle = 0 AND (i.priority_type != 'warehouse' OR i.return_confirmed = 1)
             ");
-            $confirmed = $conn->affected_rows;
+            while ($idRes && $idRow = $idRes->fetch_assoc()) { $caIds[] = (int)$idRow['id']; }
+            $confirmed = 0;
+            $caFailed  = false;
+            foreach (array_chunk($caIds, 500) as $caChunk) {
+                $ok = tplQueryRetry($conn, "UPDATE transferpicklist_item
+                    SET status = 'transferred', confirmed_by = '$_confirmBy', confirmed_at = NOW()
+                    WHERE id IN (" . implode(',', $caChunk) . ") AND from_outlet_id IN ($inIds) AND status = 'pending'");
+                if ($ok === false) { $caFailed = true; break; }
+                $confirmed += $conn->affected_rows;
+            }
 
             $redirectBase = 'transferpicklist_outlet.php?view=outgoing';
             if ($caPicklist !== '') { $redirectBase .= '&picklist_no=' . urlencode($caPicklist); }
-            $redirectBase .= '&confirmed=' . $confirmed;
+            $redirectBase .= '&confirmed=' . $confirmed . ($caFailed ? '&busy=1' : '');
             header('Location: ' . $redirectBase);
             exit;
         }
@@ -246,7 +280,7 @@ if (!empty($myOutletIds)) {
                 $qtyActual = isset($_POST['qty_actual']) ? (float)$_POST['qty_actual'] : $maxQty;
                 if ($qtyActual < 1)       { $qtyActual = 1; }
                 if ($qtyActual > $maxQty) { $qtyActual = $maxQty; }
-                $conn->query("UPDATE transferpicklist_item SET status='transferred', qty_transfer=$qtyActual, $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
+                tplQueryRetry($conn, "UPDATE transferpicklist_item SET status='transferred', qty_transfer=$qtyActual, $_confirmSet WHERE id=$item_id AND from_outlet_id IN ($inIds)");
                 $msg      = 'Item marked as transferred.';
                 $msg_type = 'success';
             }
@@ -704,6 +738,10 @@ if (!empty($myOutletIds)) {
 <?php if (isset($_GET['confirmed'])): ?>
 <div class="alpro-alert alpro-success"><?php echo (int)$_GET['confirmed']; ?> item(s) confirmed and marked as transferred
     by <b><?php echo htmlspecialchars(isset($nama_staff) && $nama_staff !== '' ? $nama_staff : ''); ?></b> on <?php echo date('d M Y, h:i A'); ?>.</div>
+<?php endif; ?>
+<?php if (isset($_GET['busy'])): ?>
+<div class="alpro-alert alpro-error">The system was busy (someone else was confirming at the same time), so <b>not all items were confirmed</b>.
+    Please press <b>Confirm All</b> again — items already confirmed are not affected.</div>
 <?php endif; ?>
 
 <div class="alpro-box" style="margin-bottom:0;">
