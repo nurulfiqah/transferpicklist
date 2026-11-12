@@ -918,8 +918,9 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
 .wh-cat-menu { position:absolute; z-index:1000; top:30px; left:0; width:250px; background:#fff; border:1px solid #ccc; border-radius:6px; box-shadow:0 6px 16px rgba(0,0,0,.12); padding:6px; }
 .wh-cat-menu .wh-cat-find { width:100% !important; margin-bottom:4px; }
 .wh-cat-list { max-height:240px; overflow-y:auto; }
-body .filter-bar label.wh-cat-opt { display:flex !important; align-items:center; gap:6px; font-size:12px !important; color:#222; padding:3px 4px; margin:0 !important; cursor:pointer; white-space:normal; text-align:left; }
+body .filter-bar label.wh-cat-opt { display:flex; align-items:center; gap:6px; font-size:12px !important; color:#222; padding:3px 4px; margin:0 !important; cursor:pointer; white-space:normal; text-align:left; }
 .wh-cat-opt:hover { background:#f2f6fc; }
+body .filter-bar label.wh-cat-opt.wh-cat-hide { display:none !important; } /* hidden by Find category */
 .wh-cat-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:6px; border-top:1px solid #eee; padding-top:6px; }
 .wh-cat-none { font-size:12px; color:#999; padding:4px; }
 .pagination { margin-top:12px; display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
@@ -1018,7 +1019,8 @@ body .filter-bar label.wh-cat-opt { display:flex !important; align-items:center;
                         <div class="wh-cat-none">No categories</div>
                         <?php else: ?>
                         <input type="text" class="wh-cat-find" placeholder="Find category..." data-no-autofilter
-                               oninput="var q=this.value.toLowerCase();this.parentNode.querySelectorAll('label.wh-cat-opt').forEach(function(l){l.style.display=l.textContent.toLowerCase().indexOf(q)>-1?'':'none';});">
+                               onkeydown="if(event.key==='Enter'){event.preventDefault();}"
+                               oninput="var q=this.value.toLowerCase();this.parentNode.querySelectorAll('label.wh-cat-opt').forEach(function(l){l.classList.toggle('wh-cat-hide',l.textContent.toLowerCase().indexOf(q)===-1);});">
                         <div class="wh-cat-list">
                             <?php foreach ($_catOpts as $_co): ?>
                             <label class="wh-cat-opt"><input type="checkbox" name="category[]" value="<?php echo htmlspecialchars($_co); ?>" data-no-autofilter
