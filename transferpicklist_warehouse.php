@@ -921,7 +921,6 @@ table.wh-tbl tr:hover td { background:#f5f8ff; }
 body .filter-bar label.wh-cat-opt { display:flex; align-items:center; gap:6px; font-size:12px !important; color:#222; padding:3px 4px; margin:0 !important; cursor:pointer; white-space:normal; text-align:left; }
 .wh-cat-opt:hover { background:#f2f6fc; }
 body .filter-bar label.wh-cat-opt.wh-cat-hide { display:none !important; } /* hidden by Find category */
-.wh-cat-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:6px; border-top:1px solid #eee; padding-top:6px; }
 .wh-cat-none { font-size:12px; color:#999; padding:4px; }
 .pagination { margin-top:12px; display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
 .pagination a, .pagination span { padding:4px 10px; border:1px solid #ddd; border-radius:4px; font-size:12px; text-decoration:none; color:#333; }
@@ -1027,13 +1026,36 @@ body .filter-bar label.wh-cat-opt.wh-cat-hide { display:none !important; } /* hi
                                 <?php echo in_array($_co, $filterCategories, true) ? 'checked' : ''; ?>> <?php echo htmlspecialchars($_co); ?></label>
                             <?php endforeach; ?>
                         </div>
-                        <div class="wh-cat-actions">
-                            <button type="button" class="alpro-btn alpro-btn-grey" onclick="this.closest('.wh-cat-menu').querySelectorAll('input[type=checkbox]').forEach(function(c){c.checked=false;});">Clear</button>
-                            <button type="submit" class="alpro-btn alpro-btn-blue">Apply</button>
-                        </div>
                         <?php endif; ?>
                     </div>
                 </details>
+                <script>
+                // Category applies by itself (no Apply / Clear buttons): ~1s after the last tick, so
+                // several categories can be ticked with one reload, or at once when the dropdown is
+                // closed (click anywhere outside). Unticking everything = all categories.
+                (function () {
+                    var dd = document.currentScript.previousElementSibling;
+                    if (!dd || !dd.classList.contains('wh-cat-dd')) { return; }
+                    var form = dd.closest('form'), timer = null;
+                    var boxes = dd.querySelectorAll('input[type=checkbox]');
+                    var start = Array.prototype.map.call(boxes, function (c) { return c.checked; }).join();
+                    function changed() { return Array.prototype.map.call(boxes, function (c) { return c.checked; }).join() !== start; }
+                    function apply() {
+                        clearTimeout(timer);
+                        if (start === null || !changed()) { return; } // already sent, or nothing changed
+                        start = null; // apply only once
+                        if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+                    }
+                    boxes.forEach(function (c) {
+                        c.addEventListener('change', function () { clearTimeout(timer); timer = setTimeout(apply, 1000); });
+                    });
+                    // close on click outside, and apply what was ticked
+                    document.addEventListener('click', function (e) {
+                        if (dd.open && !dd.contains(e.target)) { dd.open = false; apply(); }
+                    });
+                    dd.addEventListener('toggle', function () { if (!dd.open) { apply(); } });
+                })();
+                </script>
             </div>
             <div>
                 <label>Confirm Return</label>
